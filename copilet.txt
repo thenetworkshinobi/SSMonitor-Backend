@@ -1,0 +1,111 @@
+Here's a Python script that uses the sqlite3 library to interact with the database and the ping3 library to ping each IP address. This script reads the device_list table, pings the IP addresses five times, and updates the status in the same table based on the response rate:
+
+python
+import sqlite3
+from ping3 import ping
+
+def ping_ip(ip_address, attempts=5):
+    """Ping an IP address multiple times and calculate the response rate."""
+    success_count = sum(1 for _ in range(attempts) if ping(ip_address, timeout=1))
+    return (success_count / attempts) * 100
+
+def update_device_status(db_name, table_name):
+    """Read IPs from the database, ping them, and update their status."""
+    connection = sqlite3.connect(db_name)
+    cursor = connection.cursor()
+
+    # Read IP addresses from the device_list table
+    cursor.execute(f"SELECT ip_address FROM {table_name}")
+    devices = cursor.fetchall()
+
+    for device in devices:
+        ip_address = device[0]
+        response_rate = ping_ip(ip_address)
+
+        status = 'online' if response_rate > 75 else 'offline'
+
+        # Update the status in the database
+        cursor.execute(f"UPDATE {table_name} SET status = ? WHERE ip_address = ?", (status, ip_address))
+
+    connection.commit()
+    connection.close()
+
+# Database and table names
+database_name = "sdash2.db"
+device_list_table = "device_list"
+
+# Call the function
+update_device_status(database_name, device_list_table)
+Prerequisites:
+Install ping3: You can install this library for pinging by running:
+
+bash
+pip install ping3
+Database: Ensure that your sdash2 database has a device_list table with the columns ip_address (string) and status (string).
+
+This script calculates the percentage of successful pings and updates the status field accordingly. If you run into any issues, let me know!
+
+create a python script the reads a table device_list from mysql database sdash2 ip_address and for each ip_address ping it 5 times and if over 75% response write to device_list table for that ip address status online
+Here’s a Python script to connect to a MySQL database, read the IP addresses from the device_list table, ping each one 5 times, and update the status in the table accordingly. This script uses the mysql-connector-python library to connect to the MySQL database and ping3 to handle the pinging:
+
+python
+import mysql.connector
+from ping3 import ping
+
+def ping_ip(ip_address, attempts=5):
+    """Ping an IP address multiple times and calculate the response rate."""
+    success_count = sum(1 for _ in range(attempts) if ping(ip_address, timeout=1))
+    return (success_count / attempts) * 100
+
+def update_device_status():
+    """Connect to the database, check IPs, and update their status."""
+    # Connect to the MySQL database
+    connection = mysql.connector.connect(
+        host="your_mysql_host",  # e.g., "localhost"
+        user="your_username",
+        password="your_password",
+        database="sdash2"
+    )
+    cursor = connection.cursor()
+
+    # Query to retrieve IP addresses
+    select_query = "SELECT ip_address FROM device_list"
+    cursor.execute(select_query)
+    devices = cursor.fetchall()
+
+    for device in devices:
+        ip_address = device[0]
+        response_rate = ping_ip(ip_address)
+
+        status = 'online' if response_rate > 75 else 'offline'
+
+        # Update status in the database
+        update_query = "UPDATE device_list SET status = %s WHERE ip_address = %s"
+        cursor.execute(update_query, (status, ip_address))
+
+    # Commit changes and close the connection
+    connection.commit()
+    connection.close()
+
+# Call the function
+update_device_status()
+Prerequisites:
+Install Required Libraries:
+
+Install the ping3 library for pinging:
+
+bash
+pip install ping3
+Install the mysql-connector-python library to connect to your MySQL database:
+
+bash
+pip install mysql-connector-python
+Database Setup:
+
+Ensure your MySQL database (sdash2) contains a table device_list with columns ip_address (string) and status (string).
+
+Replace Connection Details:
+
+Update the host, user, password, and database values with your MySQL database connection details.
+
+This script calculates the response rate for each IP address and updates the status in the database to online if the response rate exceeds 75%, otherwise sets it to offline. Let me know if you’d like assistance with configuring or tweaking this further!
