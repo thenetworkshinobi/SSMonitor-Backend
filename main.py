@@ -6,8 +6,8 @@ def ping_ip(ip_address, attempts=5):
     success_count = sum(1 for _ in range(attempts) if ping(ip_address, timeout=1))
     return (success_count / attempts) * 100
 
-def update_device_status():
-    """Connect to the database, check IPs, and update their status."""
+def update_device_device_status():
+    """Connect to the database, check IPs, and update their device_status."""
     # Connect to the MySQL database
     connection = mysql.connector.connect(
         host="localhost",  # e.g., "localhost"
@@ -26,15 +26,15 @@ def update_device_status():
         ip_address = device[0]
         response_rate = ping_ip(ip_address)
 
-        status = 'Online' if response_rate > 75 else 'offline'
+        device_status = 'Online' if response_rate > 75 else 'offline'
 
-        # Update status in the database
-        update_query = "UPDATE device_list SET status = %s WHERE ip_address = %s"
-        cursor.execute(update_query, (status, ip_address))
+        # Update device_status in the database
+        update_query = "UPDATE device_list SET device_status = %s WHERE ip_address = %s"
+        cursor.execute(update_query, (device_status, ip_address))
 
     # Commit changes and close the connection
     connection.commit()
     connection.close()
 
 # Call the function
-update_device_status()
+update_device_device_status()
