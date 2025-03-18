@@ -26,7 +26,7 @@ def update_device_device_status():
         ip_address = device[0]
         response_rate = ping_ip(ip_address)
 
-        device_status = 'Online' if response_rate > 75 else 'offline'
+        device_status = 'Online' if response_rate > 75 else 'Offline'
 
         # Update device_status in the database
         update_query = "UPDATE device_list SET device_status = %s WHERE ip_address = %s"
