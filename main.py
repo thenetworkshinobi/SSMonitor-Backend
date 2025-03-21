@@ -52,9 +52,9 @@ def update_device_device_status():
 
 def send_email_notification():
     # Email settings
-    sender_email = '79788@we.utt.edu.tt'
-    sender_password = 'utt!0077'
-    recipient_email = '79788@we.utt.edu.tt'
+    sender_email = '***@we.utt.edu.tt'
+    sender_password = '***'
+    recipient_email = '***@we.utt.edu.tt'
     smtp_server = 'smtp.office365.com'
     smtp_port = 587
 
