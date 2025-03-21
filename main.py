@@ -23,32 +23,6 @@ def ping_ip(ip_address, attempts=5):
     success_count = sum(1 for _ in range(attempts) if ping(ip_address, timeout=1))
     return (success_count / attempts) * 100
 
-def update_device_device_status():
-    """Connect to the database, check IPs, and update their device_status."""
-    # Connect to the MySQL database
-    db_connected = dbConnect()
-    cursor = db_connected.cursor()
-
-    # Query to retrieve IP addresses
-    select_query = "SELECT ip_address FROM device_list"
-    cursor.execute(select_query)
-    devices = cursor.fetchall()
-
-    for device in devices:
-        ip_address = device[0]
-        response_rate = ping_ip(ip_address)
-
-        device_status = 'Online' if response_rate > 75 else 'Offline'
-
-        # Update device_status in the database
-        update_query = "UPDATE device_list SET device_status = %s WHERE ip_address = %s"
-        cursor.execute(update_query, (device_status, ip_address))
-
-    # Commit changes and close the database
-    database.commit()
-    database.close()
-
-
 
 def send_email_notification():
     # Email settings
@@ -63,7 +37,7 @@ def send_email_notification():
         cursor = db_connected.cursor(dictionary=True)
 
         # Query the IP address status
-        query = "SELECT ip_address, status FROM your_table WHERE status = 'offline'"
+        query = "SELECT ip_address, device_status FROM device_list WHERE device_status = 'offline'"
         cursor.execute(query)
         results = cursor.fetchall()
 
@@ -99,8 +73,38 @@ def send_email_notification():
         if 'database' in locals() and database.is_connected():
             database.close()
 
+def update_device_device_status():
+    """Connect to the database, check IPs, and update their device_status."""
+    try:
+        # Connect to the MySQL database
+        db_connected = dbConnect()
+        cursor = db_connected.cursor()
+
+        # Query to retrieve IP addresses
+        select_query = "SELECT ip_address FROM device_list"
+        cursor.execute(select_query)
+        devices = cursor.fetchall()
+
+        for device in devices:
+            ip_address = device[0]
+            response_rate = ping_ip(ip_address)
+
+            device_status = 'Online' if response_rate > 75 else 'Offline'
+
+            # Update device_status in the database
+            update_query = "UPDATE device_list SET device_status = %s WHERE ip_address = %s"
+            cursor.execute(update_query, (device_status, ip_address))
+
+        # Commit changes and close the database
+        db_connected.commit()
+    except Exception as e:
+        print(f"Error occurred: {e}")
+    finally:
+        db_connected.close()
+
+
 # Call the function
-send_email_notification()
+# send_email_notification()
 
 # Call the function
 update_device_device_status()
