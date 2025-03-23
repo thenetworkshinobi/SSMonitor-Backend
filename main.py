@@ -5,7 +5,8 @@ from email.mime.text import MIMEText
 
 def dbConnect():
     db_config = {
-        'host':'localhost',  # e.g., "localhost"
+        #'host':'localhost',  # e.g., "localhost"
+        'host' : '192.168.100.232',
         'user': 'ssadminuser',
         'password' : 'Password1',
         'database' : 'sdash2'
