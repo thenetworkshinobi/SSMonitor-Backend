@@ -3,6 +3,7 @@ from ping3 import ping
 import smtplib
 from email.mime.text import MIMEText
 import os
+import time
 
 def dbConnect():
     """Establish a connection to the database."""
@@ -101,7 +102,7 @@ def update_device_device_status():
             deviceID = device[0]
 
             response_rate = ping_ip(ip_address)
-            status_update = 2 if response_rate >= 75 else 1
+            status_update = 3 if response_rate >= 75 else 2
 
             update_query = """
             INSERT INTO device_status (deviceID, statusID, updateTime)
@@ -121,4 +122,10 @@ def update_device_device_status():
             db_connected.close()
 
 # Call the function
-update_device_device_status()
+
+try:
+    while True:
+        update_device_device_status()
+        time.sleep(10)
+except KeyboardInterrupt:
+    print("Stopping...")
