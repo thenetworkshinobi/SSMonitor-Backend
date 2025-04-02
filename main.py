@@ -1,9 +1,16 @@
+import adafruit_dht
 import mysql.connector
 from ping3 import ping
 import smtplib
 from email.mime.text import MIMEText
 import os
 import time
+import board
+
+
+
+
+
 
 def dbConnect():
     """Establish a connection to the database."""
@@ -121,11 +128,29 @@ def update_device_device_status():
         if db_connected and db_connected.is_connected():
             db_connected.close()
 
+def update_temp_humidity():
+    dhtdevice = adafruit_dht.DHT11(board.D17, use_pulseio=False)
+    try:        
+        temperature_c = dhtdevice.temperature
+        humidity = dhtdevice.humidity
+    except RuntimeError as error:
+        # Handle errors (common with DHT sensors)
+        print(error.args[0])
+        time.sleep(2.0)        
+    except Exception as error:
+        dhtDevice.exit()
+        raise error
+    if humidity is not None and temperature_c is not None:
+        print("Temp={0:0.1f}C  Humidity={1:0.1f}%".format(temperature_c, humidity))
+    else:
+        print("Sensor failure. Check wiring.")
+
 # Call the function
 
 try:
     while True:
         update_device_device_status()
+        update_temp_humidity()
         time.sleep(10)
 except KeyboardInterrupt:
     print("Stopping...")
