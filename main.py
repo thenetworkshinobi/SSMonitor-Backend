@@ -150,7 +150,7 @@ def update_temp_humidity():
 try:
     while True:
         update_device_device_status()
-        update_temp_humidity()
+        #update_temp_humidity()
         time.sleep(10)
 except KeyboardInterrupt:
     print("Stopping...")
