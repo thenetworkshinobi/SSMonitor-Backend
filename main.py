@@ -162,7 +162,7 @@ def convert_bps_to_mbps(bps):
     if bps is None or bps == "Unavailable":
         return "Unavailable"
     try:
-        mbps = bps / (8 * 1_048_576)  # Convert bps to MB/s
+        mbps = bps / (1_048_576)  # Convert bps to mb/s
         return f"{mbps:.2f}"  # Format to 2 decimal places
     except Exception as e:
         print(f"Error during conversion: {e}")
@@ -220,15 +220,15 @@ def process_snmp():
                 # Append data to list
                 linux_devices_data.append({
                     "ip_address": ip,
-                    "cpu_usage": f"{cpu_usage}%" if cpu_usage is not None else "Unavailable",
-                    "ram_total": f"{ram_total} KB" if ram_total is not None else "Unavailable",
-                    "ram_used": f"{ram_used} KB" if ram_used is not None else "Unavailable",
-                    "ram_usage_percentage": f"{ram_usage_percentage:.2f}%" if isinstance(ram_usage_percentage, float) else ram_usage_percentage,
-                    "network_throughput": f"{network_throughput} MB/s" if network_throughput is not None else "Unavailable"
+                    "cpu_usage": f"{cpu_usage}" if cpu_usage is not None else "Unavailable",
+                    "ram_total": f"{ram_total}" if ram_total is not None else "Unavailable",
+                    "ram_used": f"{ram_used}" if ram_used is not None else "Unavailable",
+                    "ram_usage_percentage": f"{ram_usage_percentage:.2f}" if isinstance(ram_usage_percentage, float) else ram_usage_percentage,
+                    "network_throughput": f"{network_throughput}" if network_throughput is not None else "Unavailable"
                 })
 
         # Write output to JSON file
-        with open("linux_devices_data.json", "w") as json_file:
+        with open("/var/www/html/data/linux_devices_data.json", "w") as json_file:
             json.dump(linux_devices_data, json_file, indent=4)
 
         print("Data has been written to linux_devices_data.json!")
