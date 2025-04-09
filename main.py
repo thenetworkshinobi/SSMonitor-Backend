@@ -153,10 +153,10 @@ def get_snmp_data(ip, community, oid):
         return result.value  # Convert to integer for calculation
     except EasySNMPTimeoutError:
         print(f"SNMP request timed out for IP: {ip}")
-        return None
+        return "0"
     except EasySNMPError as e:
         print(f"SNMP request failed for IP: {ip} with error: {e}")
-        return None
+        return "0"
 
 
 def get_wmi_data(ip):
@@ -226,7 +226,7 @@ def convert_bps_to_mbps(bps):
         print(f"Error during conversion: {e}")
         return "Unavailable"
 
-def process_snmp():
+def get_realtime_data():
     """Fetch IP addresses from the database and collect SNMP data for Linux devices."""
     # Connect to the database
     connection = dbConnect()
@@ -237,7 +237,7 @@ def process_snmp():
     try:
         # Fetch IP addresses and device types
         cursor = connection.cursor(dictionary=True)
-        query = "SELECT ip_address, os, rfc1918 FROM recent_device_status"
+        query = "SELECT ip_address, os, rfc1918, latest_status FROM recent_device_status"
         cursor.execute(query)
         devices = cursor.fetchall()
 
@@ -254,8 +254,9 @@ def process_snmp():
             rfc1918 = device.get('rfc1918')
             ip = device.get('ip_address')
             os = device.get('os', '').lower()
+            status = device.get('latest_status').lower
             if rfc1918 and ip:              
-                if os == 'linux':
+                if os == 'linux' and status == 'online':
                     print(f"Fetching SNMP data for IP: {ip}")
                     # Fetch SNMP data
                     cpu_usage = get_snmp_data(ip, community, cpu_oid)
@@ -264,7 +265,7 @@ def process_snmp():
                     network_throughput_bps = int(get_snmp_data(ip, community, network_oid))
                     network_throughput = convert_bps_to_mbps(network_throughput_bps) if network_throughput_bps else "0"
 
-                    if ram_total is not None and ram_used is not None:
+                    if ram_total != 0 and ram_used != 0:
                         ram_total_value = int(ram_total)  # Parse string to integer for calculation
                         ram_used_value = int(ram_used)    # Parse string to integer for calculation
                         ram_usage_percentage = (ram_used_value / ram_total_value) * 100
@@ -286,7 +287,7 @@ def process_snmp():
                         "ram_usage_percentage": f"{ram_usage_percentage:.2f}" if isinstance(ram_usage_percentage, float) else ram_usage_percentage,
                         "network_throughput": f"{network_throughput}" if network_throughput is not None else "0"
                     })
-                elif os == 'windows':
+                elif os == 'windows' and status == 'online':
                     # Fetch WMI data for Windows devices
                     print(f"Fetching WMI data for IP: {ip}")
                     wmi_data = get_wmi_data(ip)
@@ -320,7 +321,7 @@ try:
     while True:
         update_device_device_status()
         #update_temp_humidity()
-        process_snmp()
+        get_realtime_data()
         time.sleep(10)
 except KeyboardInterrupt:
     print("Stopping...")
