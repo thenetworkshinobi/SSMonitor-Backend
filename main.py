@@ -8,6 +8,7 @@ import time
 #import board
 import json
 from easysnmp import Session, EasySNMPTimeoutError, EasySNMPError
+import winrm
 
 def dbConnect():
     """Establish a connection to the database."""
@@ -157,6 +158,63 @@ def get_snmp_data(ip, community, oid):
         print(f"SNMP request failed for IP: {ip} with error: {e}")
         return None
 
+
+def get_wmi_data(ip):
+    """Fetch data from Windows devices using PyWinRM."""
+    try:
+        # Create a WinRM session
+        session = winrm.Session(f'http://{ip}:5985/wsman', auth=('ssmonitor', 'Password1'))  # Replace with actual credentials
+        print(f"Fetching data for IP: {ip}. Exception: {e}")
+        # Query Windows device for CPU usage
+        cpu_query = 'Get-WmiObject -Query "SELECT LoadPercentage FROM Win32_Processor" | Select-Object -ExpandProperty LoadPercentage'
+        cpu_usage_result = session.run_ps(cpu_query)
+        cpu_usage = cpu_usage_result.std_out.decode().strip()
+
+        # Query Windows device for total and used RAM
+        ram_query = """
+        $computerSystem = Get-WmiObject Win32_ComputerSystem
+        $os = Get-WmiObject Win32_OperatingSystem
+        [PSCustomObject]@{
+            TotalRam = $computerSystem.TotalPhysicalMemory
+            UsedRam = ($computerSystem.TotalPhysicalMemory - $os.FreePhysicalMemory * 1024)
+        }
+        """
+        ram_usage_result = session.run_ps(ram_query)
+        ram_data = ram_usage_result.std_out.decode().strip().splitlines()
+        total_ram = ram_data[0].split(":")[1].strip()
+        used_ram = ram_data[1].split(":")[1].strip()
+
+        # Query Windows device for network throughput
+        network_query = 'Get-WmiObject -Query "SELECT BytesReceivedPerSec FROM Win32_PerfFormattedData_Tcpip_NetworkInterface" | Select-Object -ExpandProperty BytesReceivedPerSec'
+        network_throughput_result = session.run_ps(network_query)
+        network_throughput = network_throughput_result.std_out.decode().strip()
+
+        # Calculate RAM usage percentage
+        total_ram_value = int(total_ram)
+        used_ram_value = int(used_ram)
+        ram_usage_percentage = (used_ram_value / total_ram_value) * 100
+
+        # Convert network throughput to MB/s
+        network_throughput = convert_bps_to_mbps(int(network_throughput))
+
+        return {
+            "cpu_usage": cpu_usage,
+            "ram_total": total_ram,
+            "ram_used": used_ram,
+            "ram_usage_percentage": f"{ram_usage_percentage:.2f}",
+            "network_throughput": network_throughput
+        }
+    except Exception as e:
+        print(f"Error fetching data for IP: {ip}. Exception: {e}")
+        return {
+            "cpu_usage": "0",
+            "ram_total": "0",
+            "ram_used": "0",
+            "ram_usage_percentage": "0",
+            "network_throughput": "0"
+        }
+
+
 def convert_bps_to_mbps(bps):
     """Convert network throughput from bps to MB/s."""
     if bps is None or bps == "Unavailable":
@@ -179,7 +237,7 @@ def process_snmp():
     try:
         # Fetch IP addresses and device types
         cursor = connection.cursor(dictionary=True)
-        query = "SELECT ip_address, os FROM recent_device_status"
+        query = "SELECT ip_address, os, rfc1918 FROM recent_device_status"
         cursor.execute(query)
         devices = cursor.fetchall()
 
@@ -191,47 +249,62 @@ def process_snmp():
         network_oid = "1.3.6.1.2.1.2.2.1.10.1"    # Example OID for network throughput
 
         # Collect data for Linux devices
-        linux_devices_data = []
+        stat_devices_data = []
         for device in devices:
-            if device['os'].lower() == 'linux':
-                ip = device['ip_address']
-                print(f"Fetching SNMP data for IP: {ip}")
+            rfc1918 = device.get('rfc1918')
+            ip = device.get('ip_address')
+            os = device.get('os', '').lower()
+            if rfc1918 and ip:              
+                if os == 'linux':
+                    print(f"Fetching SNMP data for IP: {ip}")
+                    # Fetch SNMP data
+                    cpu_usage = get_snmp_data(ip, community, cpu_oid)
+                    ram_total = int(get_snmp_data(ip, community, ram_total_oid))
+                    ram_used = int(get_snmp_data(ip, community, ram_used_oid))
+                    network_throughput_bps = int(get_snmp_data(ip, community, network_oid))
+                    network_throughput = convert_bps_to_mbps(network_throughput_bps) if network_throughput_bps else "0"
 
-                # Fetch SNMP data
-                cpu_usage = get_snmp_data(ip, community, cpu_oid)
-                ram_total = int(get_snmp_data(ip, community, ram_total_oid))
-                ram_used = int(get_snmp_data(ip, community, ram_used_oid))
-                network_throughput_bps = int(get_snmp_data(ip, community, network_oid))
-                network_throughput = convert_bps_to_mbps(network_throughput_bps) if network_throughput_bps else "Unavailable"
-
-                if ram_total is not None and ram_used is not None:
-                    ram_total_value = int(ram_total)  # Parse string to integer for calculation
-                    ram_used_value = int(ram_used)    # Parse string to integer for calculation
-                    ram_usage_percentage = (ram_used_value / ram_total_value) * 100
-                else:
-                    ram_total_value = ram_used_value = ram_usage_percentage = "Unavailable"
-                
-                # Calculate RAM usage percentage
-                if ram_total and ram_used:
-                    ram_usage_percentage = (ram_used / ram_total) * 100
-                else:
-                    ram_usage_percentage = "Unavailable"
-                
-                # Append data to list
-                linux_devices_data.append({
-                    "ip_address": ip,
-                    "cpu_usage": f"{cpu_usage}" if cpu_usage is not None else "Unavailable",
-                    "ram_total": f"{ram_total}" if ram_total is not None else "Unavailable",
-                    "ram_used": f"{ram_used}" if ram_used is not None else "Unavailable",
-                    "ram_usage_percentage": f"{ram_usage_percentage:.2f}" if isinstance(ram_usage_percentage, float) else ram_usage_percentage,
-                    "network_throughput": f"{network_throughput}" if network_throughput is not None else "Unavailable"
-                })
+                    if ram_total is not None and ram_used is not None:
+                        ram_total_value = int(ram_total)  # Parse string to integer for calculation
+                        ram_used_value = int(ram_used)    # Parse string to integer for calculation
+                        ram_usage_percentage = (ram_used_value / ram_total_value) * 100
+                    else:
+                        ram_total_value = ram_used_value = ram_usage_percentage = "0"
+                    
+                    # Calculate RAM usage percentage
+                    if ram_total and ram_used:
+                        ram_usage_percentage = (ram_used / ram_total) * 100
+                    else:
+                        ram_usage_percentage = "0"
+                    
+                    # Append data to list
+                    stat_devices_data.append({
+                        "ip_address": ip,
+                        "cpu_usage": f"{cpu_usage}" if cpu_usage is not None else "0",
+                        "ram_total": f"{ram_total}" if ram_total is not None else "0",
+                        "ram_used": f"{ram_used}" if ram_used is not None else "0",
+                        "ram_usage_percentage": f"{ram_usage_percentage:.2f}" if isinstance(ram_usage_percentage, float) else ram_usage_percentage,
+                        "network_throughput": f"{network_throughput}" if network_throughput is not None else "0"
+                    })
+                elif os == 'windows':
+                    # Fetch WMI data for Windows devices
+                    print(f"Fetching WMI data for IP: {ip}")
+                    wmi_data = get_wmi_data(ip)
+                    
+                    stat_devices_data.append({
+                        "ip_address": ip,
+                        "cpu_usage": wmi_data["cpu_usage"],
+                        "ram_total": wmi_data["ram_total"],
+                        "ram_used": wmi_data["ram_used"],
+                        "ram_usage_percentage": f"{wmi_data['ram_usage_percentage']:.2f}" if isinstance(wmi_data["ram_usage_percentage"], float) else wmi_data["ram_usage_percentage"],
+                        "network_throughput": wmi_data["network_throughput"]
+                    })
 
         # Write output to JSON file
-        with open("/var/www/html/data/linux_devices_data.json", "w") as json_file:
-            json.dump(linux_devices_data, json_file, indent=4)
+        with open("/var/www/html/data/devices_data.json", "w") as json_file:
+            json.dump(stat_devices_data, json_file, indent=4)
 
-        print("Data has been written to linux_devices_data.json!")
+        print("Data has been written to stat_devices_data.json!")
 
     except mysql.connector.Error as err:
         print(f"Database query error: {err}")
