@@ -1,14 +1,17 @@
 #import adafruit_dht
 import mysql.connector
 from ping3 import ping
-#import smtplib
-#from email.mime.text import MIMEText
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import os
 import time
 #import board
 import json
 from easysnmp import Session, EasySNMPTimeoutError, EasySNMPError
 import winrm
+from RPLCD.i2c import CharLCD
+import asyncio
 
 def dbConnect():
     """Establish a connection to the database."""
@@ -38,15 +41,27 @@ def ping_ip(ip_address, attempts=5):
         except Exception as e:
             print(f"Error pinging {ip_address}: {e}")
     return (success_count / attempts) * 100
+import json
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+def load_smtp_config(config_file):
+    """Load SMTP configuration from a JSON file."""
+    try:
+        with open(config_file, 'r') as file:
+            config = json.load(file)
+        return config
+    except Exception as e:
+        print(f"Error loading SMTP configuration: {e}")
+        return None
 
 def send_email_notification():
     """Send email alerts for devices that are offline."""
-    sender_email = os.getenv('SENDER_EMAIL')
-    sender_password = os.getenv('SENDER_PASSWORD')
-    recipient_email = '***@we.utt.edu.tt'
-    smtp_server = 'smtp.office365.com'
-    smtp_port = 587
-
+    smtp_config = load_smtp_config("smtp-config.json")
+    if not smtp_config:
+        print("Failed to load SMTP configuration")
+        return
     try:
         db_connected = dbConnect()
         if not db_connected:
@@ -55,27 +70,35 @@ def send_email_notification():
         cursor = db_connected.cursor()
 
         query = """
-        SELECT ip_address FROM device d
+        SELECT ip_address, hostname FROM device d
         JOIN device_status ds ON d.deviceID = ds.deviceID
         WHERE ds.statusID = 1
         """
         cursor.execute(query)
-        results = cursor.fetchall()
+        ip_results = cursor.fetchall()
+        
+        query = "SELECT email FROM adminuser"
+        cursor.execute(query)
+        email_results = cursor.fetchall()
+        to_email = [row[0] for row in email_results] 
 
-        if results:
+        if ip_results:
+            subject = "Device(s) Down"
             message_body = "The following IP address(es) are offline:\n\n"
-            for row in results:
-                message_body += f"IP Address: {row[0]}\n"
+            for row in ip_results:
+                message_body += f"Hostname: {row[1]} IP Address: {row[0]}\n"
 
             msg = MIMEText(message_body)
-            msg['Subject'] = 'IP Address Status Alert'
-            msg['From'] = sender_email
-            msg['To'] = recipient_email
+            msg['FROM'] = smtp_config['sender_email']
+            msg['To'] = "," .join(to_email) 
+            msg['Subject'] = subject
+            msg.attach(MIMEText(message_body, 'plain'))
+            
 
-            with smtplib.SMTP(smtp_server, smtp_port) as server:
+            with smtplib.SMTP(smtp_config['smtp_server'], smtp_config['port']) as server:
                 server.starttls()
-                server.login(sender_email, sender_password)
-                server.send_message(msg)
+                server.login(smtp_config['sender_email'], smtp_config['sender_password'])
+                server.sendmail(smtp_config['sender_email'], to_email, msg.astring())
 
             print("Email sent successfully.")
         else:
@@ -226,17 +249,17 @@ def convert_bps_to_mbps(bps):
         print(f"Error during conversion: {e}")
         return "Unavailable"
 
-def get_realtime_data():
+async def get_realtime_data():
     """Fetch IP addresses from the database and collect SNMP data for Linux devices."""
     # Connect to the database
-    connection = dbConnect()
-    if connection is None:
+    db_connection = dbConnect()
+    if db_connection is None:
         print("Failed to connect to the database. Exiting.")
         return
 
     try:
         # Fetch IP addresses and device types
-        cursor = connection.cursor(dictionary=True)
+        cursor = db_connection.cursor(dictionary=True)
         query = "SELECT ip_address, os, rfc1918, latest_status FROM recent_device_status"
         cursor.execute(query)
         devices = cursor.fetchall()
@@ -304,9 +327,9 @@ def get_realtime_data():
         # Write output to JSON file
         with open("/var/www/html/data/devices_data.json", "w") as json_file:
             json.dump(stat_devices_data, json_file, indent=4)
-
+            
         print("Data has been written to stat_devices_data.json!")
-
+        await asyncio.sleep(1)
     except mysql.connector.Error as err:
         print(f"Database query error: {err}")
     finally:
@@ -314,14 +337,60 @@ def get_realtime_data():
         connection.close()
         print("Database connection closed.")
 
+async def display_device_status():
+    # LCD initialization
+    lcd = CharLCD('PCF8574', 0x27)  # Replace 0x27 with your LCD's I2C address
 
-# Call the function
+    # Database connection
+    try:
+        db_connected = dbConnect()
+        if not db_connected:
+            return
+        cursor = db_connected(dictionary=True)
 
-try:
-    while True:
-        update_device_device_status()
-        #update_temp_humidity()
-        get_realtime_data()
+        # Query the recent_device_status view
+        query = "SELECT hostname, ip_address, latest_status FROM recent_device_status"
+        cursor.execute(query)
+        rows = cursor.fetchall()
+
+        # Display each row on the LCD
+        for row in rows:
+            lcd.clear()
+            # Display hostname and IP address on the first line
+            lcd.write_string(f"Host: {row['hostname'][:16]}")  # Limit to 16 characters
+            lcd.cursor_pos = (1,0)
+            # Display status on the second line
+            lcd.write_string(f"IP: {row['ip_address'][:16]}")  # Limit to 16 characters
+            await asyncio.sleep(2)
+            
+            lcd.clear()
+            lcd.write_string(f"Host: {row['hostname'][:16]}")  # Limit to 16 characters
+            lcd.cursor_pos = (1,0)           
+            lcd.write_string(f"Status: {row['latest_status'][:16]}")  # Limit to 16 characters
+            await asyncio.sleep(4)
+
+    except mysql.connector.Error as err:
+        print(f"Error: {err}")
+    finally:
+        if db.is_connected():
+            cursor.close()
+            db.close()
+        lcd.clear()
+        lcd.write_string("Done!")
         time.sleep(10)
-except KeyboardInterrupt:
-    print("Stopping...")
+        lcd.clear()
+        
+# Call the function
+async def main():
+    try:
+        while True:
+            update_device_device_status()
+            #update_temp_humidity()
+            await get_realtime_data()
+            await display_device_status()
+            time.sleep(10)
+    except KeyboardInterrupt:
+        print("Stopping...")
+        
+if __name__ == "__main__":
+    asyncio.run(main())
