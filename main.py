@@ -12,11 +12,12 @@ from easysnmp import Session, EasySNMPTimeoutError, EasySNMPError
 import winrm
 from RPLCD.i2c import CharLCD
 import asyncio
+import requests
 
 def dbConnect():
     """Establish a connection to the database."""
     db_config = {
-        'host': 'localhost',
+        'host': '192.168.100.131',
         'user': 'ssadminuser',
         'password': 'Password1',
         'database': 'ssmonitor'
@@ -249,7 +250,7 @@ def convert_bps_to_mbps(bps):
         print(f"Error during conversion: {e}")
         return "Unavailable"
 
-async def get_realtime_data():
+def get_realtime_data():
     """Fetch IP addresses from the database and collect SNMP data for Linux devices."""
     # Connect to the database
     db_connection = dbConnect()
@@ -277,7 +278,7 @@ async def get_realtime_data():
             rfc1918 = device.get('rfc1918')
             ip = device.get('ip_address')
             os = device.get('os', '').lower()
-            status = device.get('latest_status').lower
+            status = device.get('latest_status').lower()
             if rfc1918 and ip:              
                 if os == 'linux' and status == 'online':
                     print(f"Fetching SNMP data for IP: {ip}")
@@ -288,13 +289,11 @@ async def get_realtime_data():
                     network_throughput_bps = int(get_snmp_data(ip, community, network_oid))
                     network_throughput = convert_bps_to_mbps(network_throughput_bps) if network_throughput_bps else "0"
 
-                    if ram_total != 0 and ram_used != 0:
-                        ram_total_value = int(ram_total)  # Parse string to integer for calculation
-                        ram_used_value = int(ram_used)    # Parse string to integer for calculation
-                        ram_usage_percentage = (ram_used_value / ram_total_value) * 100
+                    if ram_total and ram_used:
+                        ram_usage_percentage = (ram_used / ram_total) * 100
                     else:
-                        ram_total_value = ram_used_value = ram_usage_percentage = "0"
-                    
+                        ram_usage_percentage = "0"
+                                        
                     # Calculate RAM usage percentage
                     if ram_total and ram_used:
                         ram_usage_percentage = (ram_used / ram_total) * 100
@@ -325,19 +324,35 @@ async def get_realtime_data():
                     })
 
         # Write output to JSON file
-        with open("/var/www/html/data/devices_data.json", "w") as json_file:
+        with open("/home/ssmonitor/ssagent/devices_data.json", "w") as json_file:
             json.dump(stat_devices_data, json_file, indent=4)
-            
-        print("Data has been written to stat_devices_data.json!")
-        await asyncio.sleep(1)
+        
+        # File path to the JSON file
+        json_file_path = "/home/ssmonitor/ssagent/devices_data.json"
+        
+        # Load the JSON data
+        #with open(json_file_path, 'r') as file:
+        #    json_data = json.load(file)
+        
+        # URL of the receiver script
+        url = "http://192.168.100.131/ssmonitor/reciever.php"
+
+        # Send the JSON data as a POST request
+        response = requests.post(url, json = stat_devices_data)
+
+        # Print the server's response
+        print(f"Server response: {response.text}")
+           
+        print("Data has been written to devices_data.json!")
+        time.sleep(1)
     except mysql.connector.Error as err:
         print(f"Database query error: {err}")
     finally:
         cursor.close()
-        connection.close()
+        db_connection.close()
         print("Database connection closed.")
 
-async def display_device_status():
+def display_device_status():
     # LCD initialization
     lcd = CharLCD('PCF8574', 0x27)  # Replace 0x27 with your LCD's I2C address
 
@@ -361,13 +376,13 @@ async def display_device_status():
             lcd.cursor_pos = (1,0)
             # Display status on the second line
             lcd.write_string(f"IP: {row['ip_address'][:16]}")  # Limit to 16 characters
-            await asyncio.sleep(2)
+            time.sleep(2)
             
             lcd.clear()
             lcd.write_string(f"Host: {row['hostname'][:16]}")  # Limit to 16 characters
             lcd.cursor_pos = (1,0)           
             lcd.write_string(f"Status: {row['latest_status'][:16]}")  # Limit to 16 characters
-            await asyncio.sleep(4)
+            time.sleep(4)
 
     except mysql.connector.Error as err:
         print(f"Error: {err}")
@@ -381,16 +396,16 @@ async def display_device_status():
         lcd.clear()
         
 # Call the function
-async def main():
+def main():
     try:
         while True:
             update_device_device_status()
             #update_temp_humidity()
-            await get_realtime_data()
-            await display_device_status()
+            get_realtime_data()
+            #display_device_status()
             time.sleep(10)
     except KeyboardInterrupt:
         print("Stopping...")
         
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
