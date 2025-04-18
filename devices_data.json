@@ -1,10 +1,10 @@
 [
     {
         "ip_address": "192.168.100.245",
-        "cpu_usage": "0.05",
-        "ram_total": "11702344",
-        "ram_used": "4351824",
-        "ram_usage_percentage": "37.19",
-        "network_throughput": "2.01"
+        "cpu_usage": "0.01",
+        "ram_total": "11696200",
+        "ram_used": "4011076",
+        "ram_usage_percentage": "34.29",
+        "network_throughput": "2.60"
     }
 ]
