@@ -1,5 +1,5 @@
 {
-    "email": "79788utt@gmail.com",
+    "sender_email": "79788utt@gmail.com",
     "sender_password" : "utt79788",
     "smtp_server" : "smtp.gmail.com",
     "tls" : "yes",
