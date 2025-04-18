@@ -14,7 +14,6 @@ from RPLCD.i2c import CharLCD
 import asyncio
 import requests
 
-
 def dbConnect():
     """Establish a connection to the database."""
     db_config = {
@@ -43,10 +42,6 @@ def ping_ip(ip_address, attempts=5):
         except Exception as e:
             print(f"Error pinging {ip_address}: {e}")
     return (success_count / attempts) * 100
-import json
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 
 def load_smtp_config(config_file):
     """Load SMTP configuration from a JSON file."""
@@ -59,7 +54,7 @@ def load_smtp_config(config_file):
         return None
 
 def send_email_notification():
-    """Send email alerts for devices that are offline."""
+    """Send email alerts when a device's status changes from online to offline."""
     smtp_config = load_smtp_config("smtp-config.json")
     if not smtp_config:
         print("Failed to load SMTP configuration")
@@ -72,42 +67,41 @@ def send_email_notification():
 
         cursor = db_connected.cursor()
 
+        # Query to get devices that were online but are now offline
         query = """
-        SELECT ip_address, hostname FROM device d
-
+        SELECT d.ip_address, d.hostname 
+        FROM device d
         JOIN device_status ds ON d.deviceID = ds.deviceID
-        WHERE ds.statusID = 1
+        WHERE ds.previous_statusID = 2 AND ds.statusID = 1
         """
         cursor.execute(query)
         ip_results = cursor.fetchall()
-        
+
+        # Query to get email addresses of admin users
         query = "SELECT email FROM adminuser"
         cursor.execute(query)
         email_results = cursor.fetchall()
-        to_email = [row[0] for row in email_results] 
+        to_email = [row[0] for row in email_results]
 
         if ip_results:
-            subject = "Device(s) Down"
-            message_body = "The following IP address(es) are offline:\n\n"
+            subject = "Device(s) Status Changed: Offline"
+            message_body = "The following device(s) have changed their status from online to offline:\n\n"
             for row in ip_results:
-                message_body += f"Hostname: {row[1]} IP Address: {row[0]}\n"
+                message_body += f"Hostname: {row[1]}, IP Address: {row[0]}\n"
 
             msg = MIMEText(message_body)
             msg['FROM'] = smtp_config['sender_email']
-            msg['To'] = "," .join(to_email) 
+            msg['To'] = ",".join(to_email)
             msg['Subject'] = subject
-            msg.attach(MIMEText(message_body, 'plain'))
-            
 
             with smtplib.SMTP(smtp_config['smtp_server'], smtp_config['port']) as server:
-
                 server.starttls()
                 server.login(smtp_config['sender_email'], smtp_config['sender_password'])
-                server.sendmail(smtp_config['sender_email'], to_email, msg.astring())
+                server.sendmail(smtp_config['sender_email'], to_email, msg.as_string())
 
-            print("Email sent successfully.")
+            print("Notification email sent successfully.")
         else:
-            print("No IP addresses are offline.")
+            print("No devices have changed their status to offline.")
 
     except Exception as e:
         print(f"Error occurred: {e}")
