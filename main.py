@@ -14,6 +14,7 @@ from RPLCD.i2c import CharLCD
 import asyncio
 import requests
 
+
 def dbConnect():
     """Establish a connection to the database."""
     db_config = {
@@ -63,6 +64,7 @@ def send_email_notification():
     if not smtp_config:
         print("Failed to load SMTP configuration")
         return
+
     try:
         db_connected = dbConnect()
         if not db_connected:
@@ -72,6 +74,7 @@ def send_email_notification():
 
         query = """
         SELECT ip_address, hostname FROM device d
+
         JOIN device_status ds ON d.deviceID = ds.deviceID
         WHERE ds.statusID = 1
         """
@@ -97,6 +100,7 @@ def send_email_notification():
             
 
             with smtplib.SMTP(smtp_config['smtp_server'], smtp_config['port']) as server:
+
                 server.starttls()
                 server.login(smtp_config['sender_email'], smtp_config['sender_password'])
                 server.sendmail(smtp_config['sender_email'], to_email, msg.astring())
@@ -149,7 +153,6 @@ def update_device_device_status():
             cursor.close()
         if db_connected and db_connected.is_connected():
             db_connected.close()
-
 def update_temp_humidity():
     dhtdevice = adafruit_dht.DHT11(board.D17, use_pulseio=False)
     try:        
@@ -409,3 +412,5 @@ def main():
         
 if __name__ == "__main__":
     main()
+
+
