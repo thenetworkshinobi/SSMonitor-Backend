@@ -272,7 +272,8 @@ def get_realtime_data():
         community = "ssmonitor"
         ram_total_oid = "1.3.6.1.4.1.2021.4.5.0"  # Total RAM OID
         ram_used_oid = "1.3.6.1.4.1.2021.4.6.0"   # Used RAM OID
-        cpu_oid = ".1.3.6.1.4.1.2021.10.1.3.1"    # Example OID for CPU usage
+        #cpu_oid = ".1.3.6.1.4.1.2021.10.1.3.1"    # Example OID for CPU usage
+        cpu_oid = ".1.3.6.1.4.1.2021.11.10.0"    # Example OID for CPU usage
         network_oid = "1.3.6.1.2.1.2.2.1.10.1"    # Example OID for network throughput
 
         # Collect data for Linux devices
