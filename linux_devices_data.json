@@ -1,0 +1,10 @@
+[
+    {
+        "ip_address": "192.168.100.245",
+        "cpu_usage": "0.10%",
+        "ram_total": "643100 KB",
+        "ram_used": "151284 KB",
+        "ram_usage_percentage": "23.52%",
+        "network_throughput": "0.11 MB/s"
+    }
+]
