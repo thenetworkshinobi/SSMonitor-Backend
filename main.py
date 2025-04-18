@@ -253,108 +253,109 @@ def convert_bps_to_mbps(bps):
         print(f"Error during conversion: {e}")
         return "Unavailable"
 
-def get_realtime_data():
-    """Fetch IP addresses from the database and collect SNMP data for Linux devices."""
-    # Connect to the database
-    db_connection = dbConnect()
-    if db_connection is None:
-        print("Failed to connect to the database. Exiting.")
-        return
+async def get_realtime_data():
+    # Fetch IP addresses from the database and collect SNMP data for Linux devices.
+    for _ in range(10):
+        # Connect to the database
+        db_connection = dbConnect()
+        if db_connection is None:
+            print("Failed to connect to the database. Exiting.")
+            return
 
-    try:
-        # Fetch IP addresses and device types
-        cursor = db_connection.cursor(dictionary=True)
-        query = "SELECT ip_address, os, rfc1918, latest_status FROM recent_device_status"
-        cursor.execute(query)
-        devices = cursor.fetchall()
+        try:
+            # Fetch IP addresses and device types
+            cursor = db_connection.cursor(dictionary=True)
+            query = "SELECT ip_address, os, rfc1918, latest_status FROM recent_device_status"
+            cursor.execute(query)
+            devices = cursor.fetchall()
 
-        # SNMP community string and OIDs
-        community = "ssmonitor"
-        ram_total_oid = "1.3.6.1.4.1.2021.4.5.0"  # Total RAM OID
-        ram_used_oid = "1.3.6.1.4.1.2021.4.6.0"   # Used RAM OID
-        #cpu_oid = ".1.3.6.1.4.1.2021.10.1.3.1"    # Example OID for CPU usage
-        cpu_oid = ".1.3.6.1.4.1.2021.11.10.0"    # Example OID for CPU usage
-        network_oid = "1.3.6.1.2.1.2.2.1.10.1"    # Example OID for network throughput
+            # SNMP community string and OIDs
+            community = "ssmonitor"
+            ram_total_oid = "1.3.6.1.4.1.2021.4.5.0"  # Total RAM OID
+            ram_used_oid = "1.3.6.1.4.1.2021.4.6.0"   # Used RAM OID
+            #cpu_oid = ".1.3.6.1.4.1.2021.10.1.3.1"    # Example OID for CPU usage
+            cpu_oid = ".1.3.6.1.4.1.2021.11.10.0"    # Example OID for CPU usage
+            network_oid = "1.3.6.1.2.1.2.2.1.10.1"    # Example OID for network throughput
 
-        # Collect data for Linux devices
-        stat_devices_data = []
-        for device in devices:
-            rfc1918 = device.get('rfc1918')
-            ip = device.get('ip_address')
-            os = device.get('os', '').lower()
-            status = device.get('latest_status').lower()
-            if rfc1918 and ip:              
-                if os == 'linux' and status == 'online':
-                    print(f"Fetching SNMP data for IP: {ip}")
-                    # Fetch SNMP data
-                    cpu_usage = get_snmp_data(ip, community, cpu_oid)
-                    ram_total = int(get_snmp_data(ip, community, ram_total_oid))
-                    ram_used = int(get_snmp_data(ip, community, ram_used_oid))
-                    network_throughput_bps = int(get_snmp_data(ip, community, network_oid))
-                    network_throughput = convert_bps_to_mbps(network_throughput_bps) if network_throughput_bps else "0"
+            # Collect data for Linux devices
+            stat_devices_data = []
+            for device in devices:
+                rfc1918 = device.get('rfc1918')
+                ip = device.get('ip_address')
+                os = device.get('os', '').lower()
+                status = device.get('latest_status').lower()
+                if rfc1918 and ip:              
+                    if os == 'linux' and status == 'online':
+                        print(f"Fetching SNMP data for IP: {ip}")
+                        # Fetch SNMP data
+                        cpu_usage = get_snmp_data(ip, community, cpu_oid)
+                        ram_total = int(get_snmp_data(ip, community, ram_total_oid))
+                        ram_used = int(get_snmp_data(ip, community, ram_used_oid))
+                        network_throughput_bps = int(get_snmp_data(ip, community, network_oid))
+                        network_throughput = convert_bps_to_mbps(network_throughput_bps) if network_throughput_bps else "0"
 
-                    if ram_total and ram_used:
-                        ram_usage_percentage = (ram_used / ram_total) * 100
-                    else:
-                        ram_usage_percentage = "0"
-                                        
-                    # Calculate RAM usage percentage
-                    if ram_total and ram_used:
-                        ram_usage_percentage = (ram_used / ram_total) * 100
-                    else:
-                        ram_usage_percentage = "0"
-                    
-                    # Append data to list
-                    stat_devices_data.append({
-                        "ip_address": ip,
-                        "cpu_usage": f"{cpu_usage}" if cpu_usage is not None else "0",
-                        "ram_total": f"{ram_total}" if ram_total is not None else "0",
-                        "ram_used": f"{ram_used}" if ram_used is not None else "0",
-                        "ram_usage_percentage": f"{ram_usage_percentage:.2f}" if isinstance(ram_usage_percentage, float) else ram_usage_percentage,
-                        "network_throughput": f"{network_throughput}" if network_throughput is not None else "0"
-                    })
-                elif os == 'windows' and status == 'online':
-                    # Fetch WMI data for Windows devices
-                    print(f"Fetching WMI data for IP: {ip}")
-                    wmi_data = get_wmi_data(ip)
-                    
-                    stat_devices_data.append({
-                        "ip_address": ip,
-                        "cpu_usage": wmi_data["cpu_usage"],
-                        "ram_total": wmi_data["ram_total"],
-                        "ram_used": wmi_data["ram_used"],
-                        "ram_usage_percentage": f"{wmi_data['ram_usage_percentage']:.2f}" if isinstance(wmi_data["ram_usage_percentage"], float) else wmi_data["ram_usage_percentage"],
-                        "network_throughput": wmi_data["network_throughput"]
-                    })
+                        if ram_total and ram_used:
+                            ram_usage_percentage = (ram_used / ram_total) * 100
+                        else:
+                            ram_usage_percentage = "0"
+                                            
+                        # Calculate RAM usage percentage
+                        if ram_total and ram_used:
+                            ram_usage_percentage = (ram_used / ram_total) * 100
+                        else:
+                            ram_usage_percentage = "0"
+                        
+                        # Append data to list
+                        stat_devices_data.append({
+                            "ip_address": ip,
+                            "cpu_usage": f"{cpu_usage}" if cpu_usage is not None else "0",
+                            "ram_total": f"{ram_total}" if ram_total is not None else "0",
+                            "ram_used": f"{ram_used}" if ram_used is not None else "0",
+                            "ram_usage_percentage": f"{ram_usage_percentage:.2f}" if isinstance(ram_usage_percentage, float) else ram_usage_percentage,
+                            "network_throughput": f"{network_throughput}" if network_throughput is not None else "0"
+                        })
+                    elif os == 'windows' and status == 'online':
+                        # Fetch WMI data for Windows devices
+                        print(f"Fetching WMI data for IP: {ip}")
+                        wmi_data = get_wmi_data(ip)
+                        
+                        stat_devices_data.append({
+                            "ip_address": ip,
+                            "cpu_usage": wmi_data["cpu_usage"],
+                            "ram_total": wmi_data["ram_total"],
+                            "ram_used": wmi_data["ram_used"],
+                            "ram_usage_percentage": f"{wmi_data['ram_usage_percentage']:.2f}" if isinstance(wmi_data["ram_usage_percentage"], float) else wmi_data["ram_usage_percentage"],
+                            "network_throughput": wmi_data["network_throughput"]
+                        })
 
-        # Write output to JSON file
-        with open("/home/ssmonitor/ssagent/devices_data.json", "w") as json_file:
-            json.dump(stat_devices_data, json_file, indent=4)
-        
-        # File path to the JSON file
-        json_file_path = "/home/ssmonitor/ssagent/devices_data.json"
-        
-        # Load the JSON data
-        #with open(json_file_path, 'r') as file:
-        #    json_data = json.load(file)
-        
-        # URL of the receiver script
-        url = "http://192.168.100.131/ssmonitor/reciever.php"
+            # Write output to JSON file
+            with open("/home/ssmonitor/ssagent/devices_data.json", "w") as json_file:
+                json.dump(stat_devices_data, json_file, indent=4)
+            
+            # File path to the JSON file
+            json_file_path = "/home/ssmonitor/ssagent/devices_data.json"
+            
+            # Load the JSON data
+            #with open(json_file_path, 'r') as file:
+            #    json_data = json.load(file)
+            
+            # URL of the receiver script
+            url = "http://192.168.100.131/ssmonitor/reciever.php"
 
-        # Send the JSON data as a POST request
-        response = requests.post(url, json = stat_devices_data)
+            # Send the JSON data as a POST request
+            response = requests.post(url, json = stat_devices_data)
 
-        # Print the server's response
-        print(f"Server response: {response.text}")
-           
-        print("Data has been written to devices_data.json!")
-        time.sleep(1)
-    except mysql.connector.Error as err:
-        print(f"Database query error: {err}")
-    finally:
-        cursor.close()
-        db_connection.close()
-        print("Database connection closed.")
+            # Print the server's response
+            print(f"Server response: {response.text}")
+            
+            print("Data has been written to devices_data.json!")
+            await asyncio.sleep(1)
+        except mysql.connector.Error as err:
+            print(f"Database query error: {err}")
+        finally:
+            cursor.close()
+            db_connection.close()
+            print("Database connection closed.")
 
 def display_device_status():
     # LCD initialization
@@ -403,11 +404,15 @@ def display_device_status():
 def main():
     try:
         while True:
+            start_time = time.time()
             update_device_device_status()
             #update_temp_humidity()
-            get_realtime_data()
+            asyncio.run(get_realtime_data())
             #display_device_status()
             time.sleep(10)
+            elapsed_time =  time.time() - start_time
+            if elapsed_time <10:
+                time.sleep(10 - elapsed_time)
     except KeyboardInterrupt:
         print("Stopping...")
         
