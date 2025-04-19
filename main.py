@@ -53,6 +53,11 @@ def load_smtp_config(config_file):
         print(f"Error loading SMTP configuration: {e}")
         return None
 
+
+
+# Dictionary to track the last email sent time for each device
+last_email_sent = {}
+
 def send_email_notification():
     """Send email alerts when a device's status changes from online to offline."""
     smtp_config = load_smtp_config("smtp-config.json")
@@ -69,10 +74,13 @@ def send_email_notification():
 
         # Query to get devices that were online but are now offline
         query = """
-        SELECT d.ip_address, d.hostname 
-        FROM device d
-        JOIN device_status ds ON d.deviceID = ds.deviceID
-        WHERE ds.previous_statusID = 2 AND ds.statusID = 1
+        SELECT DISTINCT d.hostname, d.ip_address 
+        FROM device_status AS ds_current
+        JOIN device_status AS ds_previous ON ds_current.deviceID = ds_previous.deviceID
+        JOIN device AS d ON d.deviceID = ds_current.deviceID
+        WHERE ds_current.statusID = 2
+        AND ds_previous.statusID = 3
+        AND ds_previous.updateTime < ds_current.updateTime
         """
         cursor.execute(query)
         ip_results = cursor.fetchall()
@@ -85,26 +93,46 @@ def send_email_notification():
 
         if ip_results:
             subject = "Device(s) Status Changed: Offline"
-            message_body = "The following device(s) have changed their status from online to offline:\n\n"
             for row in ip_results:
-                message_body += f"Hostname: {row[1]}, IP Address: {row[0]}\n"
+                hostname = row[0]
+                ip_address = row[1]
+                device_identifier = f"{hostname}-{ip_address}"
 
-            msg = MIMEText(message_body)
-            msg['FROM'] = smtp_config['sender_email']
-            msg['To'] = ",".join(to_email)
-            msg['Subject'] = subject
+                # Check if the device has already sent an email in the past 30 minutes
+                current_time = time.time()
+                if device_identifier in last_email_sent:
+                    last_sent_time = last_email_sent[device_identifier]
+                    if current_time - last_sent_time < 120:  # 1 minutes = 60 seconds
+                        continue
 
-            with smtplib.SMTP(smtp_config['smtp_server'], smtp_config['port']) as server:
-                server.starttls()
-                server.login(smtp_config['sender_email'], smtp_config['sender_password'])
-                server.sendmail(smtp_config['sender_email'], to_email, msg.as_string())
+                # Update the last sent time for this device
+                last_email_sent[device_identifier] = current_time
 
-            print("Notification email sent successfully.")
+                # Create the email message
+                message_body = f"Device Offline:\nHostname: {hostname} | IP Address: {ip_address} "
+                msg = MIMEText(message_body)
+                msg['From'] = smtp_config['sender_email']
+                msg['To'] = ", ".join(to_email)
+                msg['Subject'] = subject
+
+                try:
+                    # Send the email
+                    with smtplib.SMTP(smtp_config['smtp_server'], smtp_config['port']) as server:
+                        server.starttls()
+                        server.login(smtp_config['sender_email'], smtp_config['sender_password'])
+                        server.sendmail(smtp_config['sender_email'], to_email, msg.as_string())
+
+                    print(f"Notification email sent for {hostname} ({ip_address}).")
+
+                except Exception as email_error:
+                    print(f"Failed to send email for {hostname} ({ip_address}): {email_error}")
+
         else:
             print("No devices have changed their status to offline.")
 
     except Exception as e:
         print(f"Error occurred: {e}")
+
     finally:
         if cursor:
             cursor.close()
@@ -267,8 +295,7 @@ async def get_realtime_data():
             community = "ssmonitor"
             ram_total_oid = "1.3.6.1.4.1.2021.4.5.0"  # Total RAM OID
             ram_used_oid = "1.3.6.1.4.1.2021.4.6.0"   # Used RAM OID
-            #cpu_oid = ".1.3.6.1.4.1.2021.10.1.3.1"    # Example OID for CPU usage
-            cpu_oid = ".1.3.6.1.4.1.2021.11.10.0"    # Example OID for CPU usage
+            cpu_oid = ".1.3.6.1.4.1.2021.10.1.3.1"    # Example OID for CPU usage
             network_oid = "1.3.6.1.2.1.2.2.1.10.1"    # Example OID for network throughput
 
             # Collect data for Linux devices
@@ -400,6 +427,7 @@ def main():
         while True:
             start_time = time.time()
             update_device_device_status()
+            send_email_notification()
             #update_temp_humidity()
             asyncio.run(get_realtime_data())
             #display_device_status()
