@@ -1,4 +1,5 @@
-#import adafruit_dht
+import adafruit_dht
+import board
 import mysql.connector
 from ping3 import ping
 import smtplib
@@ -6,13 +7,19 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import os
 import time
-#import board
 import json
 from easysnmp import Session, EasySNMPTimeoutError, EasySNMPError
 import winrm
 from RPLCD.i2c import CharLCD
 import asyncio
 import requests
+
+# Set Temperature and Humidity Sensor Pin
+dhtdevice = adafruit_dht.DHT11(board.D17)
+# Dictionary to track the last email sent time for each device
+last_email_sent = {}
+# LCD initialization
+lcd = CharLCD('PCF8574', 0x27)  # Replace 0x27 with your LCD's I2C address
 
 def dbConnect():
     """Establish a connection to the database."""
@@ -52,11 +59,6 @@ def load_smtp_config(config_file):
     except Exception as e:
         print(f"Error loading SMTP configuration: {e}")
         return None
-
-
-
-# Dictionary to track the last email sent time for each device
-last_email_sent = {}
 
 def send_email_notification():
     """Send email alerts when a device's status changes from online to offline."""
@@ -175,8 +177,8 @@ def update_device_device_status():
             cursor.close()
         if db_connected and db_connected.is_connected():
             db_connected.close()
+
 def update_temp_humidity():
-    dhtdevice = adafruit_dht.DHT11(board.D17, use_pulseio=False)
     try:        
         temperature_c = dhtdevice.temperature
         humidity = dhtdevice.humidity
@@ -189,6 +191,29 @@ def update_temp_humidity():
         raise error
     if humidity is not None and temperature_c is not None:
         print("Temp={0:0.1f}C  Humidity={1:0.1f}%".format(temperature_c, humidity))
+        try:
+            db_connected = dbConnect()
+            if not db_connected:
+                return
+
+            cursor = db_connected.cursor()
+
+            update_query = """
+            INSERT INTO environment (temperature, humidity)
+            VALUES (%s, %s)
+            """
+            cursor.execute(update_query, (temperature_c, humidity))
+
+            db_connected.commit()
+            print("Environment Data updated successfully.")
+        except Exception as e:
+            print(f"Error occurred: {e}")
+            print("Environment Data NOT updated successfully.")
+        finally:
+            if cursor:
+                cursor.close()
+            if db_connected and db_connected.is_connected():
+                db_connected.close()
     else:
         print("Sensor failure. Check wiring.")
 
@@ -206,7 +231,6 @@ def get_snmp_data(ip, community, oid):
     except EasySNMPError as e:
         print(f"SNMP request failed for IP: {ip} with error: {e}")
         return "0"
-
 
 def get_wmi_data(ip):
     """Fetch data from Windows devices using PyWinRM."""
@@ -262,7 +286,6 @@ def get_wmi_data(ip):
             "ram_usage_percentage": "0",
             "network_throughput": "0"
         }
-
 
 def convert_bps_to_mbps(bps):
     """Convert network throughput from bps to MB/s."""
@@ -379,15 +402,12 @@ async def get_realtime_data():
             print("Database connection closed.")
 
 def display_device_status():
-    # LCD initialization
-    lcd = CharLCD('PCF8574', 0x27)  # Replace 0x27 with your LCD's I2C address
-
     # Database connection
     try:
         db_connected = dbConnect()
         if not db_connected:
             return
-        cursor = db_connected(dictionary=True)
+        cursor = db_connected.cursor(dictionary=True)
 
         # Query the recent_device_status view
         query = "SELECT hostname, ip_address, latest_status FROM recent_device_status"
@@ -397,6 +417,7 @@ def display_device_status():
         # Display each row on the LCD
         for row in rows:
             lcd.clear()
+            lcd.cursor_pos = (0,0)
             # Display hostname and IP address on the first line
             lcd.write_string(f"Host: {row['hostname'][:16]}")  # Limit to 16 characters
             lcd.cursor_pos = (1,0)
@@ -405,6 +426,7 @@ def display_device_status():
             time.sleep(2)
             
             lcd.clear()
+            lcd.cursor_pos = (0,0)
             lcd.write_string(f"Host: {row['hostname'][:16]}")  # Limit to 16 characters
             lcd.cursor_pos = (1,0)           
             lcd.write_string(f"Status: {row['latest_status'][:16]}")  # Limit to 16 characters
@@ -413,24 +435,22 @@ def display_device_status():
     except mysql.connector.Error as err:
         print(f"Error: {err}")
     finally:
-        if db.is_connected():
+        if db_connected.is_connected():
             cursor.close()
-            db.close()
-        lcd.clear()
-        lcd.write_string("Done!")
-        time.sleep(10)
-        lcd.clear()
+            db_connected.close()
+            lcd.clear()        
         
 # Call the function
 def main():
     try:
         while True:
             start_time = time.time()
+            asyncio.run(get_realtime_data())
+            display_device_status()
             update_device_device_status()
             send_email_notification()
-            #update_temp_humidity()
-            asyncio.run(get_realtime_data())
-            #display_device_status()
+            update_temp_humidity()            
+            display_device_status()
             time.sleep(10)
             elapsed_time =  time.time() - start_time
             if elapsed_time <10:
