@@ -402,7 +402,8 @@ async def get_realtime_data():
             print("Database connection closed.")
 
 def display_device_status():
-    # Database connection
+    #for _ in range(10):
+        # Database connection
     try:
         db_connected = dbConnect()
         if not db_connected:
@@ -438,7 +439,8 @@ def display_device_status():
         if db_connected.is_connected():
             cursor.close()
             db_connected.close()
-            lcd.clear()        
+            lcd.clear()
+            print(f"Displayed Device Status on LCD")   
         
 # Call the function
 def main():
