@@ -48,3 +48,5 @@ def display_device_status():
 
 # Call the function
 display_device_status()
+
+# https://www.circuitbasics.com/raspberry-pi-i2c-lcd-set-up-and-programming/ 

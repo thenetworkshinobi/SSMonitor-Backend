@@ -20,3 +20,5 @@ while True:
         print("Reading from DHT failure: ", e.args)
 
     time.sleep(1)
+    
+    # https://pypi.org/project/adafruit-circuitpython-dht/
