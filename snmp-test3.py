@@ -93,6 +93,7 @@ def get_device_status():
                     ram_usage_percentage = (ram_used / ram_total) * 100
                 else:
                     ram_usage_percentage = "Unavailable"
+                    
                 
                 # Append data to list
                 linux_devices_data.append({
