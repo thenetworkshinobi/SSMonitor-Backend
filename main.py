@@ -240,7 +240,7 @@ def email_notification_handler(ip_results=None, temperature=None):
     Handles email notifications based on ip_results or temperature.
 
     Parameters:
-        ip_results (list of tuples): List of devices that went offline, with (hostname, ip_address).
+        ip_results (list): List of devices that went offline, with (hostname, ip_address).
         temperature (float): Current temperature value to check if > 35°C.
     """
     # Notify about offline devices
@@ -253,7 +253,7 @@ def email_notification_handler(ip_results=None, temperature=None):
         send_email(subject, message_body)
 
     # Notify about high temperature
-    if temperature is not None and temperature > 35:
+    if temperature is not None and temperature > 25:
         subject = "Temperature Alert: High Temperature Detected"
         message_body = f"Warning: The recorded temperature is {temperature}°C, which exceeds the threshold of 35°C.\n\nPlease investigate the issue immediately."
         send_email(subject, message_body)
