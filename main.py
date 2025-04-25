@@ -21,19 +21,13 @@ last_email_sent = {}
 # LCD initialization
 lcd = CharLCD('PCF8574', 0x27)  # Replace 0x27 with your LCD's I2C address
 
-#ip_results = {}
-#temperature = None
+last_temp_update = None
 
-
+#Establish database conncection
 def dbConnect():
     """Establish a connection to the database."""
-    db_config = {
-        'host': '192.168.100.131',
-        'user': 'ssadminuser',
-        'password': 'Password1',
-        'database': 'ssmonitor'
-    }
     try:
+        db_config = load_config("db-config.json")
         dbconnection = mysql.connector.connect(**db_config)
         if dbconnection.is_connected():
             print("Connection successful!")
@@ -42,6 +36,7 @@ def dbConnect():
         print(f"Database connection error: {err}")
         return None
 
+# Recieve IP address and return percentage of succesfull pings
 def ping_ip(ip_address, attempts=5):
     """Ping an IP address multiple times and calculate the response rate."""
     success_count = 0
@@ -54,7 +49,8 @@ def ping_ip(ip_address, attempts=5):
             print(f"Error pinging {ip_address}: {e}")
     return (success_count / attempts) * 100
 
-def load_smtp_config(config_file):
+# Get SMTP config date from JSON file
+def load_config(config_file):
     """Load SMTP configuration from a JSON file."""
     try:
         with open(config_file, 'r') as file:
@@ -66,7 +62,7 @@ def load_smtp_config(config_file):
 
 #def send_email_notification():
     """Send email alerts when a device's status changes from online to offline."""
-    smtp_config = load_smtp_config("smtp-config.json")
+    smtp_config = load_config("smtp-config.json")
     if not smtp_config:
         print("Failed to load SMTP configuration")
         return
@@ -145,30 +141,55 @@ def load_smtp_config(config_file):
         if db_connected and db_connected.is_connected():
             db_connected.close()
 
+#Determine if deivce status changed to offline and return list of devices
 def get_device_status_changes():
+    current_time = time.time()
+    offline_devices_email = [] # List to store devices eligible for email
     """Retrieve device status changes where devices went offline."""
     try:
         db_connected = dbConnect()
         if not db_connected:
-            print("Failed to connect to database")
+            print(f"Failed to connect to database")
             return None
 
         cursor = db_connected.cursor()
 
         # Query devices that were online and are now offline
         query = """
-        SELECT DISTINCT d.hostname, d.ip_address 
-        FROM device_status AS ds_current
-        JOIN device_status AS ds_previous ON ds_current.deviceID = ds_previous.deviceID
-        JOIN device AS d ON d.deviceID = ds_current.deviceID
-        WHERE ds_current.statusID = 2
-        AND ds_previous.statusID = 3
-        AND ds_previous.updateTime < ds_current.updateTime
+        SELECT DISTINCT  d.hostname, d.ip_address FROM  device_status AS ds_current
+        JOIN  device AS d ON ds_current.deviceID = d.deviceID
+        WHERE ds_current.statusID = 2 -- Device is currently offline
+        AND ds_current.updateTime = (SELECT MAX(ds_inner.updateTime)
+        FROM device_status AS ds_inner
+        WHERE ds_inner.deviceID = ds_current.deviceID) -- Ensure we are checking the latest status
+        AND EXISTS (SELECT 1 FROM device_status AS ds_previous
+        WHERE ds_previous.deviceID = ds_current.deviceID
+        AND ds_previous.statusID IN (1, 3) -- Device was either unknown or online
+        AND ds_previous.updateTime < ds_current.updateTime);
         """
         cursor.execute(query)
         ip_results = cursor.fetchall()
+        #print(ip_results)
+        
+        if ip_results:
+            for row in ip_results:
+                hostname = row[0]
+                ip_address = row[1]
+                device_identifier = f"{hostname}-{ip_address}"
 
-        return ip_results
+                # Check if the device has already sent an email in the past x minutes
+                
+                if device_identifier in last_email_sent:
+                    last_sent_time = last_email_sent[device_identifier]
+                    if current_time - last_sent_time < 120:  # 1 minutes = 60 seconds
+                        continue
+
+                    offline_devices_email.append(row)
+                
+                # Update the last sent time for this device
+                last_email_sent[device_identifier] = current_time                
+                
+        return offline_devices_email
 
     except Exception as e:
         print(f"Error while fetching data: {e}")
@@ -184,7 +205,7 @@ def get_device_status_changes():
 def send_email(subject, message_body):
     
     """Send email alerts for device status changes."""
-    smtp_config = load_smtp_config("smtp-config.json")
+    smtp_config = load_config("smtp-config.json")
     if not smtp_config:
         print("Failed to load SMTP configuration")
         return
@@ -227,35 +248,38 @@ def send_email(subject, message_body):
                 server.starttls()
                 server.login(smtp_config['sender_email'], smtp_config['sender_password'])
                 server.sendmail(smtp_config['sender_email'], to_email, msg.as_string()) # Send email
-
-        print(f"Email sent successfully to {to_email} with subject: {subject}")
-        return True
+        except Exception as e:
+            print(f"Error while sending admin emails: {e}")
+            return False
+        finally:
+            print(f"Email sent successfully to {to_email} with subject: {subject}")
+            return True
 
     except Exception as e:
         print(f"Failed to send email: {e}")
         return False
 
-def email_notification_handler(ip_results=None, temperature=None):
+async def email_notification_handler(offline_devices_email=None, temperature=None):
     """
     Handles email notifications based on ip_results or temperature.
 
     Parameters:
-        ip_results (list): List of devices that went offline, with (hostname, ip_address).
-        temperature (float): Current temperature value to check if > 35°C.
+        offline_devices_email (list): List of devices that went offline, with (hostname, ip_address).
+        temperature (float): Current temperature value to check if > 20°C.
     """
     # Notify about offline devices
-    if ip_results:
+    if offline_devices_email:
         subject = "Device(s) Status Changed: Offline"
         message_body = "The following device(s) is offline:"
-        for hostname, ip_address in ip_results:
-            message_body += f"\n\nHostname: {hostname} | IP Address: {ip_address}\n\nPlease take immediate action."    
-        
+        for hostname, ip_address in offline_devices_email:
+            message_body += f"\nHostname: {hostname} | IP Address: {ip_address}"    
+        message_body += f"\n\nPlease take immediate action!"
         send_email(subject, message_body)
 
     # Notify about high temperature
-    if temperature is not None and temperature > 25:
+    if temperature is not None and temperature > 20:
         subject = "Temperature Alert: High Temperature Detected"
-        message_body = f"Warning: The recorded temperature is {temperature}°C, which exceeds the threshold of 35°C.\n\nPlease investigate the issue immediately."
+        message_body = f"Warning: The recorded temperature is {temperature}°C, which exceeds the threshold of 20°C.\n\nPlease investigate the issue immediately."
         send_email(subject, message_body)
     
             
@@ -297,6 +321,8 @@ def update_device_device_status():
             db_connected.close()
 
 def update_temp_humidity():
+    global last_temp_update
+    current_time = time.time()
     try:        
         temperature_c = dhtdevice.temperature
         humidity = dhtdevice.humidity
@@ -332,6 +358,9 @@ def update_temp_humidity():
                 cursor.close()
             if db_connected and db_connected.is_connected():
                 db_connected.close()
+            if last_temp_update and (current_time - last_temp_update < 120):
+                return None
+            last_temp_update = current_time   
         return temperature_c        
     else:
         print("Sensor failure. Check wiring.")
@@ -520,7 +549,7 @@ async def get_realtime_data():
             db_connection.close()
             print("Database connection closed.")
 
-def display_device_status():
+async def display_device_status():
     #for _ in range(10):
         # Database connection
     try:
@@ -566,12 +595,14 @@ async def main():
     try:
         while True:
             start_time = time.time()
-            await get_realtime_data()  # Use await for async functions
             update_device_device_status()
-            ip_results = get_device_status_changes()
+            
+            await get_realtime_data()  # Use await for async functions                        
+            offline_devices_email = get_device_status_changes()
             temperature = update_temp_humidity()
-            email_notification_handler(ip_results=ip_results, temperature=temperature)
-            display_device_status()
+            await email_notification_handler(offline_devices_email=offline_devices_email, temperature=temperature)
+            
+            await display_device_status()
             await asyncio.sleep(10)  # Async sleep instead of time.sleep()
             elapsed_time = time.time() - start_time
             if elapsed_time < 10:
@@ -580,6 +611,6 @@ async def main():
         print("Stopping...")
         
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
 
 
