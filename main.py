@@ -8,6 +8,7 @@ from email.mime.multipart import MIMEMultipart
 import os
 import time
 import json
+import subprocess
 from easysnmp import Session, EasySNMPTimeoutError, EasySNMPError
 import winrm
 from RPLCD.i2c import CharLCD
@@ -141,10 +142,10 @@ def load_config(config_file):
         if db_connected and db_connected.is_connected():
             db_connected.close()
 
-#Determine if deivce status changed to offline and return list of devices
+# Determine if deivce status changed to offline and return list of devices
 def get_device_status_changes():
     current_time = time.time()
-    offline_devices_email = [] # List to store devices eligible for email
+    offline_devices_alert = [] # List to store devices eligible for email
     """Retrieve device status changes where devices went offline."""
     try:
         db_connected = dbConnect()
@@ -184,12 +185,12 @@ def get_device_status_changes():
                     if current_time - last_sent_time < 120:  # 1 minutes = 60 seconds
                         continue
 
-                    offline_devices_email.append(row)
+                    offline_devices_alert.append(row)
                 
                 # Update the last sent time for this device
                 last_email_sent[device_identifier] = current_time                
                 
-        return offline_devices_email
+        return offline_devices_alert
 
     except Exception as e:
         print(f"Error while fetching data: {e}")
@@ -259,30 +260,32 @@ def send_email(subject, message_body):
         print(f"Failed to send email: {e}")
         return False
 
-async def email_notification_handler(offline_devices_email=None, temperature=None):
+async def notification_handler(offline_devices_alert=None, temperature=None):
     """
     Handles email notifications based on ip_results or temperature.
 
     Parameters:
-        offline_devices_email (list): List of devices that went offline, with (hostname, ip_address).
+        offline_devices_alert (list): List of devices that went offline, with (hostname, ip_address).
         temperature (float): Current temperature value to check if > 20°C.
     """
     # Notify about offline devices
-    if offline_devices_email:
+    if offline_devices_alert:
         subject = "Device(s) Status Changed: Offline"
         message_body = "The following device(s) is offline:"
-        for hostname, ip_address in offline_devices_email:
+        for hostname, ip_address in offline_devices_alert:
             message_body += f"\nHostname: {hostname} | IP Address: {ip_address}"    
         message_body += f"\n\nPlease take immediate action!"
         send_email(subject, message_body)
+        play_alert(message_body)
 
     # Notify about high temperature
     if temperature is not None and temperature > 20:
         subject = "Temperature Alert: High Temperature Detected"
         message_body = f"Warning: The recorded temperature is {temperature}°C, which exceeds the threshold of 20°C.\n\nPlease investigate the issue immediately."
         send_email(subject, message_body)
+        play_alert(message_body)
     
-            
+# Update Current device status
 def update_device_device_status():
     """Update the device_status table based on ping results."""
     try:
@@ -320,6 +323,7 @@ def update_device_device_status():
         if db_connected and db_connected.is_connected():
             db_connected.close()
 
+# Get Temp and Humididy, update database and output temp data
 def update_temp_humidity():
     global last_temp_update
     current_time = time.time()
@@ -365,6 +369,7 @@ def update_temp_humidity():
     else:
         print("Sensor failure. Check wiring.")
 
+# Get SNMP data for IP
 def get_snmp_data(ip, community, oid):
     """Fetch data from SNMP using EasySNMP."""
     try:
@@ -380,6 +385,7 @@ def get_snmp_data(ip, community, oid):
         print(f"SNMP request failed for IP: {ip} with error: {e}")
         return "0"
 
+# Get WMI data from IP
 def get_wmi_data(ip):
     """Fetch data from Windows devices using PyWinRM."""
     try:
@@ -435,6 +441,7 @@ def get_wmi_data(ip):
             "network_throughput": "0"
         }
 
+# Converter
 def convert_bps_to_mbps(bps):
     """Convert network throughput from bps to MB/s."""
     if bps is None or bps == "Unavailable":
@@ -446,6 +453,7 @@ def convert_bps_to_mbps(bps):
         print(f"Error during conversion: {e}")
         return "Unavailable"
 
+# Request SNMP data and send to website
 async def get_realtime_data():
     # Fetch IP addresses from the database and collect SNMP data for Linux devices.
     for _ in range(10):
@@ -549,6 +557,7 @@ async def get_realtime_data():
             db_connection.close()
             print("Database connection closed.")
 
+# Display current status of devices on LCD
 async def display_device_status():
     #for _ in range(10):
         # Database connection
@@ -589,7 +598,33 @@ async def display_device_status():
             db_connected.close()
             lcd.clear()
             print(f"Displayed Device Status on LCD")   
-        
+
+# Text to Speech Audio Alert
+def play_alert(message, model_path="/home/ssmonitor/ssagent/voices/en_GB-alan-medium.onnx"):
+   
+    output_wav = "/tmp/tts_output.wav"
+    print(f"Audio Alert:", message)
+    try:
+        result = subprocess.run(
+            ["piper", "--model", model_path, "--output_file", output_wav],
+            input=message.encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        if result.returncode != 0:
+            print("TTS error:", result.stderr.decode())
+            return
+
+        # Play audio via ALSA (WM8960)
+        subprocess.run(["aplay", output_wav])
+
+    except Exception as e:
+        print(f"Error during Text to Speech or playback: {e}")
+    finally:
+        if os.path.exists(output_wav):
+            os.remove(output_wav)
+            
 # Call the function
 async def main():
     try:
@@ -598,9 +633,9 @@ async def main():
             update_device_device_status()
             
             await get_realtime_data()  # Use await for async functions                        
-            offline_devices_email = get_device_status_changes()
+            offline_devices_alert = get_device_status_changes()
             temperature = update_temp_humidity()
-            await email_notification_handler(offline_devices_email=offline_devices_email, temperature=temperature)
+            await notification_handler(offline_devices_alert=offline_devices_alert, temperature=temperature)
             
             await display_device_status()
             await asyncio.sleep(10)  # Async sleep instead of time.sleep()
