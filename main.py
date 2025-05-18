@@ -61,87 +61,6 @@ def load_config(config_file):
         print(f"Error loading SMTP configuration: {e}")
         return None
 
-#def send_email_notification():
-    """Send email alerts when a device's status changes from online to offline."""
-    smtp_config = load_config("smtp-config.json")
-    if not smtp_config:
-        print("Failed to load SMTP configuration")
-        return
-
-    try:
-        db_connected = dbConnect()
-        if not db_connected:
-            return
-
-        cursor = db_connected.cursor()
-
-        # Query to get devices that were online but are now offline
-        query = """
-        SELECT DISTINCT d.hostname, d.ip_address 
-        FROM device_status AS ds_current
-        JOIN device_status AS ds_previous ON ds_current.deviceID = ds_previous.deviceID
-        JOIN device AS d ON d.deviceID = ds_current.deviceID
-        WHERE ds_current.statusID = 2
-        AND ds_previous.statusID = 3
-        AND ds_previous.updateTime < ds_current.updateTime
-        """
-        cursor.execute(query)
-        ip_results = cursor.fetchall()
-
-        # Query to get email addresses of admin users
-        query = "SELECT email FROM adminuser"
-        cursor.execute(query)
-        email_results = cursor.fetchall()
-        to_email = [row[0] for row in email_results]
-
-        if ip_results:
-            subject = "Device(s) Status Changed: Offline"
-            for row in ip_results:
-                hostname = row[0]
-                ip_address = row[1]
-                device_identifier = f"{hostname}-{ip_address}"
-
-                # Check if the device has already sent an email in the past 30 minutes
-                current_time = time.time()
-                if device_identifier in last_email_sent:
-                    last_sent_time = last_email_sent[device_identifier]
-                    if current_time - last_sent_time < 120:  # 1 minutes = 60 seconds
-                        continue
-
-                # Update the last sent time for this device
-                last_email_sent[device_identifier] = current_time
-
-                # Create the email message
-                message_body = f"Device Offline:\nHostname: {hostname} | IP Address: {ip_address} "
-                msg = MIMEText(message_body)
-                msg['From'] = smtp_config['sender_email']
-                msg['To'] = ", ".join(to_email)
-                msg['Subject'] = subject
-
-                try:
-                    # Send the email
-                    with smtplib.SMTP(smtp_config['smtp_server'], smtp_config['port']) as server:
-                        server.starttls()
-                        server.login(smtp_config['sender_email'], smtp_config['sender_password'])
-                        server.sendmail(smtp_config['sender_email'], to_email, msg.as_string())
-
-                    print(f"Notification email sent for {hostname} ({ip_address}).")
-
-                except Exception as email_error:
-                    print(f"Failed to send email for {hostname} ({ip_address}): {email_error}")
-
-        else:
-            print("No devices have changed their status to offline.")
-
-    except Exception as e:
-        print(f"Error occurred: {e}")
-
-    finally:
-        if cursor:
-            cursor.close()
-        if db_connected and db_connected.is_connected():
-            db_connected.close()
-
 # Determine if deivce status changed to offline and return list of devices
 def get_device_status_changes():
     current_time = time.time()
@@ -327,16 +246,23 @@ def update_device_device_status():
 def update_temp_humidity():
     global last_temp_update
     current_time = time.time()
-    try:        
-        temperature_c = dhtdevice.temperature
-        humidity = dhtdevice.humidity
-    except RuntimeError as error:
-        # Handle errors (common with DHT sensors)
-        print(error.args[0])
-        time.sleep(2.0)        
-    except Exception as error:
-        dhtDevice.exit()
-        raise error
+    
+    max_retries = 3
+    retry_count = 0
+    temperature_c = None
+    humidity = None
+
+    while retry_count < max_retries:
+        try:
+            temperature_c = dhtdevice.temperature
+            humidity = dhtdevice.humidity
+            if humidity is not None and temperature_c is not None:
+                break     
+        except RuntimeError as error:
+            print(f"Attempt Unable to read Temnp and Humdity: {error.args[0]}")
+            time.sleep(1.0)
+        retry_count += 1
+
     if humidity is not None and temperature_c is not None:
         print("Temp={0:0.1f}C  Humidity={1:0.1f}%".format(temperature_c, humidity))
         try:
@@ -390,8 +316,8 @@ def get_wmi_data(ip):
     """Fetch data from Windows devices using PyWinRM."""
     try:
         # Create a WinRM session
-        session = winrm.Session(f'http://{ip}:5985/wsman', auth=('ssmonitor', 'Password1'))  # Replace with actual credentials
-        print(f"Fetching data for IP: {ip}. Exception: {e}")
+        session = winrm.Session(f'http://{ip}:5985/wsman', auth=('ssmonitor', 'Password1'), transport='ntlm')
+        print(f"Fetching data for IP: {ip}.")
         # Query Windows device for CPU usage
         cpu_query = 'Get-WmiObject -Query "SELECT LoadPercentage FROM Win32_Processor" | Select-Object -ExpandProperty LoadPercentage'
         cpu_usage_result = session.run_ps(cpu_query)
@@ -412,9 +338,12 @@ def get_wmi_data(ip):
         used_ram = ram_data[1].split(":")[1].strip()
 
         # Query Windows device for network throughput
-        network_query = 'Get-WmiObject -Query "SELECT BytesReceivedPerSec FROM Win32_PerfFormattedData_Tcpip_NetworkInterface" | Select-Object -ExpandProperty BytesReceivedPerSec'
-        network_throughput_result = session.run_ps(network_query)
-        network_throughput = network_throughput_result.std_out.decode().strip()
+        network_in_query = 'Get-CimInstance Win32_PerfFormattedData_Tcpip_NetworkInterface | Select-Object -ExpandProperty BytesReceivedPerSec'
+        network_in_throughput_result = session.run_ps(network_in_query)
+        network_in_throughput = network_in_throughput_result.std_out.decode().strip() if network_in_throughput_result.std_out else None
+        network_out_query = 'Get-CimInstance Win32_PerfFormattedData_Tcpip_NetworkInterface | Select-Object -ExpandProperty BytesSentPerSec'
+        network_out_throughput_result = session.run_ps(network_out_query)
+        network_out_throughput = network_out_throughput_result.std_out.decode().strip() if network_out_throughput_result.std_out else None
 
         # Calculate RAM usage percentage
         total_ram_value = int(total_ram)
@@ -422,23 +351,26 @@ def get_wmi_data(ip):
         ram_usage_percentage = (used_ram_value / total_ram_value) * 100
 
         # Convert network throughput to MB/s
-        network_throughput = convert_bps_to_mbps(int(network_throughput))
+        network_in_throughput_mbps = convert_bps_to_mbps(int(network_in_throughput))
+        network_out_throughput_mbps = convert_bps_to_mbps(int(network_out_throughput))
 
         return {
             "cpu_usage": cpu_usage,
             "ram_total": total_ram,
             "ram_used": used_ram,
             "ram_usage_percentage": f"{ram_usage_percentage:.2f}",
-            "network_throughput": network_throughput
+            "network_in_throughput": network_in_throughput_mbps,
+            "network_out_throughput": network_out_throughput_mbps
         }
     except Exception as e:
-        print(f"Error fetching data for IP: {ip}. Exception: {e}")
+        print(f"Error fetching data for IP: {ip}. {e}")
         return {
             "cpu_usage": "0",
             "ram_total": "0",
             "ram_used": "0",
             "ram_usage_percentage": "0",
-            "network_throughput": "0"
+            "network_in_throughput": "0",
+            "network_out_throughput": "0"            
         }
 
 # Converter
@@ -447,12 +379,27 @@ def convert_bps_to_mbps(bps):
     if bps is None or bps == "Unavailable":
         return "Unavailable"
     try:
-        mbps = bps / (1_048_576)  # Convert bps to mb/s
+        mbps = round(bps / 1_000_000,2)  # Convert bps to mb/s
         return f"{mbps:.2f}"  # Format to 2 decimal places
     except Exception as e:
         print(f"Error during conversion: {e}")
         return "Unavailable"
 
+# Calculte the network through put using 2 requests
+def calculate_throughput(ip, community, oid, interval=1):
+    try:
+        first = int(get_snmp_data(ip, community, oid))
+        time.sleep(interval)
+        second = int(get_snmp_data(ip, community, oid))
+        delta = second - first
+        if delta < 0:
+            # Handle counter rollover
+            delta = (2**32 - first) + second
+        return delta * 8  # bytes to bits
+    except Exception as e:
+        print(f"Error calculating throughput for IP {ip}: {e}")
+        return 0
+    
 # Request SNMP data and send to website
 async def get_realtime_data():
     # Fetch IP addresses from the database and collect SNMP data for Linux devices.
@@ -475,7 +422,8 @@ async def get_realtime_data():
             ram_total_oid = "1.3.6.1.4.1.2021.4.5.0"  # Total RAM OID
             ram_used_oid = "1.3.6.1.4.1.2021.4.6.0"   # Used RAM OID
             cpu_oid = ".1.3.6.1.4.1.2021.10.1.3.1"    # Example OID for CPU usage
-            network_oid = "1.3.6.1.2.1.2.2.1.10.1"    # Example OID for network throughput
+            network_in_oid = ".1.3.6.1.2.1.2.2.1.10"    # Example OID for network in throughput
+            network_out_oid = ".1.3.6.1.2.1.2.2.1.16"    # Example OID for network out throughput
 
             # Collect data for Linux devices
             stat_devices_data = []
@@ -491,8 +439,10 @@ async def get_realtime_data():
                         cpu_usage = get_snmp_data(ip, community, cpu_oid)
                         ram_total = int(get_snmp_data(ip, community, ram_total_oid))
                         ram_used = int(get_snmp_data(ip, community, ram_used_oid))
-                        network_throughput_bps = int(get_snmp_data(ip, community, network_oid))
-                        network_throughput = convert_bps_to_mbps(network_throughput_bps) if network_throughput_bps else "0"
+                        network_in_throughput_bps = calculate_throughput(ip, community, network_in_oid)
+                        network_out_throughput_bps = calculate_throughput(ip, community, network_out_oid)
+                        network_in_throughput = convert_bps_to_mbps(network_in_throughput_bps) if network_in_throughput_bps else "0"
+                        network_out_throughput = convert_bps_to_mbps(network_out_throughput_bps) if network_out_throughput_bps else "0"
 
                         if ram_total and ram_used:
                             ram_usage_percentage = (ram_used / ram_total) * 100
@@ -512,9 +462,10 @@ async def get_realtime_data():
                             "ram_total": f"{ram_total}" if ram_total is not None else "0",
                             "ram_used": f"{ram_used}" if ram_used is not None else "0",
                             "ram_usage_percentage": f"{ram_usage_percentage:.2f}" if isinstance(ram_usage_percentage, float) else ram_usage_percentage,
-                            "network_throughput": f"{network_throughput}" if network_throughput is not None else "0"
+                            "network_in_throughput": f"{network_in_throughput}" if network_in_throughput is not None else "0",
+                            "network_out_throughput": f"{network_out_throughput}" if network_out_throughput is not None else "0"
                         })
-                    elif os == 'windows' and status == 'online':
+                    if os == 'windows' and status == 'online':
                         # Fetch WMI data for Windows devices
                         print(f"Fetching WMI data for IP: {ip}")
                         wmi_data = get_wmi_data(ip)
@@ -525,7 +476,8 @@ async def get_realtime_data():
                             "ram_total": wmi_data["ram_total"],
                             "ram_used": wmi_data["ram_used"],
                             "ram_usage_percentage": f"{wmi_data['ram_usage_percentage']:.2f}" if isinstance(wmi_data["ram_usage_percentage"], float) else wmi_data["ram_usage_percentage"],
-                            "network_throughput": wmi_data["network_throughput"]
+                            "network_in_throughput": wmi_data["network_in_throughput"],
+                            "network_out_throughput": wmi_data["network_out_throughput"]
                         })
 
             # Write output to JSON file
