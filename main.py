@@ -357,7 +357,7 @@ def get_wmi_data(ip):
         return {
             "cpu_usage": cpu_usage,
             "ram_total": total_ram,
-            "ram_used": used_ram,
+            "ram_available": used_ram,
             "ram_usage_percentage": f"{ram_usage_percentage:.2f}",
             "network_in_throughput": network_in_throughput_mbps,
             "network_out_throughput": network_out_throughput_mbps
@@ -367,7 +367,7 @@ def get_wmi_data(ip):
         return {
             "cpu_usage": "0",
             "ram_total": "0",
-            "ram_used": "0",
+            "ram_available": "0",
             "ram_usage_percentage": "0",
             "network_in_throughput": "0",
             "network_out_throughput": "0"            
@@ -388,20 +388,25 @@ def convert_bps_to_mbps(bps):
 # Calculte the network through put using 2 requests
 def calculate_throughput(ip, community, oid, interval=1):
     try:
-        first = int(get_snmp_data(ip, community, oid))
+        first = int(get_snmp_data(ip, community, oid))    
+        if first is None or first == "NOSUCHINSTANCE":
+            first = 0
         time.sleep(interval)
         second = int(get_snmp_data(ip, community, oid))
+        if second is None or second == "NOSUCHINSTANCE":
+            second = 0
         delta = second - first
         if delta < 0:
             # Handle counter rollover
             delta = (2**32 - first) + second
-        return delta * 8  # bytes to bits
+        return delta
     except Exception as e:
         print(f"Error calculating throughput for IP {ip}: {e}")
         return 0
     
 # Request SNMP data and send to website
-async def get_realtime_data():
+async def get_realtime_data():    
+    
     # Fetch IP addresses from the database and collect SNMP data for Linux devices.
     for _ in range(10):
         # Connect to the database
@@ -419,11 +424,11 @@ async def get_realtime_data():
 
             # SNMP community string and OIDs
             community = "ssmonitor"
-            ram_total_oid = "1.3.6.1.4.1.2021.4.5.0"  # Total RAM OID
-            ram_used_oid = "1.3.6.1.4.1.2021.4.6.0"   # Used RAM OID
-            cpu_oid = ".1.3.6.1.4.1.2021.10.1.3.1"    # Example OID for CPU usage
-            network_in_oid = ".1.3.6.1.2.1.2.2.1.10"    # Example OID for network in throughput
-            network_out_oid = ".1.3.6.1.2.1.2.2.1.16"    # Example OID for network out throughput
+            ram_total_oid = ".1.3.6.1.4.1.2021.4.5.0"  # Total RAM OID
+            ram_available_oid = ".1.3.6.1.4.1.2021.4.3.0"   # Used RAM OID
+            cpu_oid = ".1.3.6.1.4.1.2021.11.11.0"    # Example OID for CPU idle percentage
+            network_in_oid = ".1.3.6.1.2.1.2.2.1.10.2"    # Example OID for network in throughput
+            network_out_oid = ".1.3.6.1.2.1.2.2.1.16.2"    # Example OID for network out throughput
 
             # Collect data for Linux devices
             stat_devices_data = []
@@ -436,34 +441,27 @@ async def get_realtime_data():
                     if os == 'linux' and status == 'online':
                         print(f"Fetching SNMP data for IP: {ip}")
                         # Fetch SNMP data
-                        cpu_usage = get_snmp_data(ip, community, cpu_oid)
+                        cpu_usage = 100 - int(get_snmp_data(ip, community, cpu_oid))
                         ram_total = int(get_snmp_data(ip, community, ram_total_oid))
-                        ram_used = int(get_snmp_data(ip, community, ram_used_oid))
-                        network_in_throughput_bps = calculate_throughput(ip, community, network_in_oid)
-                        network_out_throughput_bps = calculate_throughput(ip, community, network_out_oid)
-                        network_in_throughput = convert_bps_to_mbps(network_in_throughput_bps) if network_in_throughput_bps else "0"
-                        network_out_throughput = convert_bps_to_mbps(network_out_throughput_bps) if network_out_throughput_bps else "0"
-
-                        if ram_total and ram_used:
-                            ram_usage_percentage = (ram_used / ram_total) * 100
-                        else:
-                            ram_usage_percentage = "0"
-                                            
+                        ram_available = int(get_snmp_data(ip, community, ram_available_oid))
+                        network_in_throughput_bps = int(calculate_throughput(ip, community, network_in_oid))
+                        network_out_throughput_bps = int(calculate_throughput(ip, community, network_out_oid))
+                        network_in_throughput = convert_bps_to_mbps(network_in_throughput_bps) if network_in_throughput_bps else 0
+                        network_out_throughput = convert_bps_to_mbps(network_out_throughput_bps) if network_out_throughput_bps else 0
+                                                                
                         # Calculate RAM usage percentage
-                        if ram_total and ram_used:
-                            ram_usage_percentage = (ram_used / ram_total) * 100
+                        if ram_total and ram_available:
+                            ram_usage_percentage = ((ram_total - ram_available)/ram_total) * 100
                         else:
-                            ram_usage_percentage = "0"
+                            ram_usage_percentage = 0
                         
                         # Append data to list
                         stat_devices_data.append({
                             "ip_address": ip,
-                            "cpu_usage": f"{cpu_usage}" if cpu_usage is not None else "0",
-                            "ram_total": f"{ram_total}" if ram_total is not None else "0",
-                            "ram_used": f"{ram_used}" if ram_used is not None else "0",
+                            "cpu_usage": f"{cpu_usage}" if cpu_usage is not None else 0,
                             "ram_usage_percentage": f"{ram_usage_percentage:.2f}" if isinstance(ram_usage_percentage, float) else ram_usage_percentage,
-                            "network_in_throughput": f"{network_in_throughput}" if network_in_throughput is not None else "0",
-                            "network_out_throughput": f"{network_out_throughput}" if network_out_throughput is not None else "0"
+                            "network_in_throughput": f"{network_in_throughput}" if network_in_throughput is not None else 0,
+                            "network_out_throughput": f"{network_out_throughput}" if network_out_throughput is not None else 0
                         })
                     if os == 'windows' and status == 'online':
                         # Fetch WMI data for Windows devices
@@ -473,8 +471,6 @@ async def get_realtime_data():
                         stat_devices_data.append({
                             "ip_address": ip,
                             "cpu_usage": wmi_data["cpu_usage"],
-                            "ram_total": wmi_data["ram_total"],
-                            "ram_used": wmi_data["ram_used"],
                             "ram_usage_percentage": f"{wmi_data['ram_usage_percentage']:.2f}" if isinstance(wmi_data["ram_usage_percentage"], float) else wmi_data["ram_usage_percentage"],
                             "network_in_throughput": wmi_data["network_in_throughput"],
                             "network_out_throughput": wmi_data["network_out_throughput"]
@@ -533,15 +529,25 @@ async def display_device_status():
             lcd.cursor_pos = (1,0)
             # Display status on the second line
             lcd.write_string(f"IP: {row['ip_address'][:16]}")  # Limit to 16 characters
-            time.sleep(2)
+            await asyncio.sleep(4) 
             
             lcd.clear()
             lcd.cursor_pos = (0,0)
             lcd.write_string(f"Host: {row['hostname'][:16]}")  # Limit to 16 characters
             lcd.cursor_pos = (1,0)           
             lcd.write_string(f"Status: {row['latest_status'][:16]}")  # Limit to 16 characters
-            time.sleep(4)
+            await asyncio.sleep(4) 
 
+        # Display temperature and humdity
+        query = "SELECT temperature, humidity FROM environment ORDER BY updateTime DESC LIMIT 1"
+        cursor.execute(query)
+        row = cursor.fetchone()
+        lcd.clear()
+        lcd.cursor_pos = (0,0)
+        lcd.write_string(f"Temp: {row['temperature']} C")  # Limit to 16 characters
+        lcd.cursor_pos = (1,0)
+        lcd.write_string(f"Humdity: {row['humidity']} %")  # Limit to 16 characters
+        await asyncio.sleep(5) 
     except mysql.connector.Error as err:
         print(f"Error: {err}")
     finally:
@@ -582,15 +588,15 @@ async def main():
     try:
         while True:
             start_time = time.time()
-            update_device_device_status()
+            #update_device_device_status()
             
             await get_realtime_data()  # Use await for async functions                        
-            offline_devices_alert = get_device_status_changes()
-            temperature = update_temp_humidity()
-            await notification_handler(offline_devices_alert=offline_devices_alert, temperature=temperature)
+            #offline_devices_alert = get_device_status_changes()
+            #temperature = update_temp_humidity()
+            #await notification_handler(offline_devices_alert=offline_devices_alert, temperature=temperature)
             
-            await display_device_status()
-            await asyncio.sleep(10)  # Async sleep instead of time.sleep()
+            #await display_device_status()
+            #await asyncio.sleep(10)  # Async sleep instead of time.sleep()
             elapsed_time = time.time() - start_time
             if elapsed_time < 10:
                 await asyncio.sleep(10 - elapsed_time)
