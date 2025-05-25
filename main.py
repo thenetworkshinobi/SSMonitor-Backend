@@ -1,3 +1,4 @@
+import sys
 import adafruit_dht
 import board
 import mysql.connector
@@ -17,25 +18,35 @@ import requests
 
 # Set Temperature and Humidity Sensor Pin
 dhtdevice = adafruit_dht.DHT11(board.D17)
+dhtdevice2 = adafruit_dht.DHT11(board.D22)
 # Dictionary to track the last email sent time for each device
 last_email_sent = {}
 # LCD initialization
 lcd = CharLCD('PCF8574', 0x27)  # Replace 0x27 with your LCD's I2C address
 
+get_realtime_data_task = None
 last_temp_update = None
+last_notification_sent = 0
+
 
 #Establish database conncection
-def dbConnect():
-    """Establish a connection to the database."""
-    try:
-        db_config = load_config("db-config.json")
-        dbconnection = mysql.connector.connect(**db_config)
-        if dbconnection.is_connected():
-            print("Connection successful!")
-        return dbconnection
-    except mysql.connector.Error as err:
-        print(f"Database connection error: {err}")
-        return None
+def dbConnect(retries=3, delay=5):
+    """Establish a connection to the database with retry mechanism."""
+    db_config = load_config("db-config.json")
+    
+    for attempt in range(retries):
+        try:
+            dbconnection = mysql.connector.connect(**db_config)
+            if dbconnection.is_connected():
+                print("Connection successful!")
+                return dbconnection
+        except mysql.connector.Error as err:
+            print(f"Database connection error (Attempt {attempt+1}): {err}")
+            time.sleep(delay)  # Wait before retrying
+        
+    print("Failed to connect to database after multiple attempts.")
+    sys.exit("Critical Error: Unable to connect to database.")
+    return None
 
 # Recieve IP address and return percentage of succesfull pings
 def ping_ip(ip_address, attempts=5):
@@ -62,7 +73,7 @@ def load_config(config_file):
         return None
 
 # Determine if deivce status changed to offline and return list of devices
-def get_device_status_changes():
+async def get_device_status_changes():
     current_time = time.time()
     offline_devices_alert = [] # List to store devices eligible for email
     """Retrieve device status changes where devices went offline."""
@@ -179,14 +190,22 @@ def send_email(subject, message_body):
         print(f"Failed to send email: {e}")
         return False
 
-async def notification_handler(offline_devices_alert=None, temperature=None):
+#Send Email, Audio Alerts every 2 minutes
+async def notification_handler(offline_devices_alert=None, temperature=None, humidity=None):
     """
-    Handles email notifications based on ip_results or temperature.
+    Handles email notifications based on ip_results, temperature and/or humdity.
 
     Parameters:
         offline_devices_alert (list): List of devices that went offline, with (hostname, ip_address).
         temperature (float): Current temperature value to check if > 20°C.
+        humdity (float): Current humidity value to check if > 40%
     """
+    global last_notification_sent
+    current_time = time.time()
+    
+    if current_time - last_notification_sent < 120:
+        return  # Exit without sending notifications
+
     # Notify about offline devices
     if offline_devices_alert:
         subject = "Device(s) Status Changed: Offline"
@@ -204,9 +223,19 @@ async def notification_handler(offline_devices_alert=None, temperature=None):
         send_email(subject, message_body)
         play_alert(message_body)
     
+    if humidity is not None and humidity > 40:
+        subject = "Humdity Alert: High Humidity Detected"
+        message_body = f"Warning: The recorded humidity is {humidity}%, which exceeds the threshold of 40%.\n\nPlease investigate the issue immediately."
+        send_email(subject, message_body)
+        play_alert(message_body)
+    
+    last_notification_sent = current_time
+
 # Update Current device status
-def update_device_device_status():
+async def update_device_status():
     """Update the device_status table based on ping results."""
+    db_connected = None
+    cursor = None
     try:
         db_connected = dbConnect()
         if not db_connected:
@@ -236,14 +265,19 @@ def update_device_device_status():
 
     except Exception as e:
         print(f"Error occurred: {e}")
+        
     finally:
         if cursor:
             cursor.close()
-        if db_connected and db_connected.is_connected():
-            db_connected.close()
+        if db_connected:
+            try:
+                if db_connected.is_connected():
+                    db_connected.close()
+            except:
+                pass
 
 # Get Temp and Humididy, update database and output temp data
-def update_temp_humidity():
+async def update_temp_humidity():
     global last_temp_update
     current_time = time.time()
     
@@ -257,43 +291,54 @@ def update_temp_humidity():
             temperature_c = dhtdevice.temperature
             humidity = dhtdevice.humidity
             if humidity is not None and temperature_c is not None:
+                break
+            temperature_c = dhtdevice2.temperature
+            humidity = dhtdevice2.humidity
+            if humidity is not None and temperature_c is not None:
                 break     
         except RuntimeError as error:
-            print(f"Attempt Unable to read Temnp and Humdity: {error.args[0]}")
+            print(f"Attempt Unable to read Temp and Humidity: {error.args[0]}")
             time.sleep(1.0)
         retry_count += 1
 
     if humidity is not None and temperature_c is not None:
         print("Temp={0:0.1f}C  Humidity={1:0.1f}%".format(temperature_c, humidity))
-        try:
-            db_connected = dbConnect()
-            if not db_connected:
-                return
 
-            cursor = db_connected.cursor()
+        # Always return temperature and humidity
+        result = (temperature_c, humidity)
 
-            update_query = """
-            INSERT INTO environment (temperature, humidity)
-            VALUES (%s, %s)
-            """
-            cursor.execute(update_query, (temperature_c, humidity))
+        # Update database only every 60 seconds
+        if last_temp_update is None or (current_time - last_temp_update >= 60):
+            try:
+                db_connected = dbConnect()
+                if not db_connected:
+                    return result
 
-            db_connected.commit()
-            print("Environment Data updated successfully.")
-        except Exception as e:
-            print(f"Error occurred: {e}")
-            print("Environment Data NOT updated successfully.")
-        finally:
-            if cursor:
-                cursor.close()
-            if db_connected and db_connected.is_connected():
-                db_connected.close()
-            if last_temp_update and (current_time - last_temp_update < 120):
-                return None
-            last_temp_update = current_time   
-        return temperature_c        
+                cursor = db_connected.cursor()
+
+                update_query = """
+                INSERT INTO environment (temperature, humidity)
+                VALUES (%s, %s)
+                """
+                cursor.execute(update_query, (temperature_c, humidity))
+
+                db_connected.commit()
+                print("Environment Data updated successfully.")
+                last_temp_update = current_time
+            except Exception as e:
+                print(f"Error occurred: {e}")
+                print("Environment Data NOT updated successfully.")
+            finally:
+                if cursor:
+                    cursor.close()
+                if db_connected and db_connected.is_connected():
+                    db_connected.close()
+
+        return result
+        
     else:
         print("Sensor failure. Check wiring.")
+        return None, None
 
 # Get SNMP data for IP
 def get_snmp_data(ip, community, oid):
@@ -373,7 +418,7 @@ def get_wmi_data(ip):
             "network_out_throughput": "0"            
         }
 
-# Converter
+# Bits per Second to Megabits per Second Converter 
 def convert_bps_to_mbps(bps):
     """Convert network throughput from bps to MB/s."""
     if bps is None or bps == "Unavailable":
@@ -386,7 +431,7 @@ def convert_bps_to_mbps(bps):
         return "Unavailable"
 
 # Calculte the network through put using 2 requests
-def calculate_throughput(ip, community, oid, interval=1):
+def calculate_throughput(ip, community, oid, interval=3):
     try:
         first = int(get_snmp_data(ip, community, oid))    
         if first is None or first == "NOSUCHINSTANCE":
@@ -395,10 +440,10 @@ def calculate_throughput(ip, community, oid, interval=1):
         second = int(get_snmp_data(ip, community, oid))
         if second is None or second == "NOSUCHINSTANCE":
             second = 0
-        delta = second - first
+        delta = (second - first) * 3
         if delta < 0:
             # Handle counter rollover
-            delta = (2**32 - first) + second
+            delta = ((2**32 - first) + second) * 3
         return delta
     except Exception as e:
         print(f"Error calculating throughput for IP {ip}: {e}")
@@ -408,7 +453,7 @@ def calculate_throughput(ip, community, oid, interval=1):
 async def get_realtime_data():    
     
     # Fetch IP addresses from the database and collect SNMP data for Linux devices.
-    for _ in range(10):
+    for _ in range(20):
         # Connect to the database
         db_connection = dbConnect()
         if db_connection is None:
@@ -585,23 +630,31 @@ def play_alert(message, model_path="/home/ssmonitor/ssagent/voices/en_GB-alan-me
             
 # Call the function
 async def main():
-    try:
-        while True:
+    global get_realtime_data_task
+    while True:
+        try:
             start_time = time.time()
-            #update_device_device_status()
             
-            await get_realtime_data()  # Use await for async functions                        
-            #offline_devices_alert = get_device_status_changes()
-            #temperature = update_temp_humidity()
-            #await notification_handler(offline_devices_alert=offline_devices_alert, temperature=temperature)
+            if get_realtime_data_task is None or get_realtime_data_task.done():
+                try:
+                    get_realtime_data_task = asyncio.create_task(get_realtime_data())
+                except Exception as e:
+                    print(f"Error restarting get_realtime_data: {e}")
+                    
+            # Start get_realtime_data as a background task            
+            await update_device_status()
             
-            #await display_device_status()
-            #await asyncio.sleep(10)  # Async sleep instead of time.sleep()
+            offline_devices_alert = await get_device_status_changes()
+            temperature, humidity = await update_temp_humidity()
+            asyncio.create_task(display_device_status())
+            #asyncio.create_task(notification_handler(offline_devices_alert=offline_devices_alert,temperature=temperature,humidity=humidity))
+
             elapsed_time = time.time() - start_time
-            if elapsed_time < 10:
-                await asyncio.sleep(10 - elapsed_time)
-    except KeyboardInterrupt:
-        print("Stopping...")
+            sleep_time = max(30 - elapsed_time, 0)  # Prevent negative sleep values
+            await asyncio.sleep(sleep_time)
+        
+        except KeyboardInterrupt:
+            print("Stopping...")
         
 if __name__ == "__main__":
     asyncio.run(main())
