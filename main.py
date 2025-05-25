@@ -647,7 +647,7 @@ async def main():
             offline_devices_alert = await get_device_status_changes()
             temperature, humidity = await update_temp_humidity()
             asyncio.create_task(display_device_status())
-            #asyncio.create_task(notification_handler(offline_devices_alert=offline_devices_alert,temperature=temperature,humidity=humidity))
+            asyncio.create_task(notification_handler(offline_devices_alert=offline_devices_alert,temperature=temperature,humidity=humidity))
 
             elapsed_time = time.time() - start_time
             sleep_time = max(30 - elapsed_time, 0)  # Prevent negative sleep values
