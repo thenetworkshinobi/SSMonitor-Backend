@@ -28,6 +28,7 @@ def update_device_status(db_name, table_name):
         cursor.execute(f"UPDATE {table_name} SET status = ? WHERE ip_address = ?", (status, ip_address))
 
     connection.commit()
+    
     connection.close()
 
 # Database and table names
